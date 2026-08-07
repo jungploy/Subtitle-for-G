@@ -104,6 +104,27 @@ def _deepl(lines, api_key, model, source, target):
 
 
 # --------------------------------------------------------------------------
+# 在 WinForms UI 线程上执行（解决 js_api 后台线程调用原生对话框的跨线程崩溃）
+# --------------------------------------------------------------------------
+def _run_on_ui(fn):
+    """
+    js_api 方法运行在后台线程（见 webview/util.py 的 js_bridge_call），
+    而 create_file_dialog 内部 dialog.ShowDialog(form) 必须在 UI 线程调用，
+    否则 WinForms 抛“跨线程操作无效”异常并吞掉对话框。这里借助主窗口 Form
+    的 Invoke 把对话框派发到 UI 线程执行，再同步取回结果。
+    """
+    try:
+        from System.Windows.Forms import Application
+        from System import Action
+
+        form = Application.OpenForms[0]
+        form.Invoke(Action(fn))
+    except Exception:
+        # 兜底：极少数环境拿不到主线程 Form 时退化直调（可能失败，但保证不崩）
+        fn()
+
+
+# --------------------------------------------------------------------------
 # 暴露给前端的 JS API
 # --------------------------------------------------------------------------
 class Api:
@@ -127,11 +148,15 @@ class Api:
 
     def open_file(self):
         win = webview.windows[0]
-        result = win.create_file_dialog(
-            webview.OPEN_DIALOG,
-            allow_multiple=False,
-            file_types=(('字幕文件', '*.srt'), ('所有文件', '*.*')),
-        )
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=('字幕文件 (*.srt)', '所有文件 (*.*)'),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
         if not result:
             return None
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -141,11 +166,15 @@ class Api:
 
     def save_as(self, default_name, contents):
         win = webview.windows[0]
-        result = win.create_file_dialog(
-            webview.SAVE_DIALOG,
-            save_filename=default_name,
-            file_types=(('SubRip 字幕', '*.srt'), ('所有文件', '*.*')),
-        )
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_name,
+                file_types=('SubRip 字幕 (*.srt)', '所有文件 (*.*)'),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
         if not result:
             return None
         path = result[0] if isinstance(result, (list, tuple)) else result
