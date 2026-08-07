@@ -13,6 +13,11 @@ let dirty = false;
 const $ = (id) => document.getElementById(id);
 const statusEl = $('status');
 
+// 是否运行在 Tauri 原生窗口（与 translate.js 的判定保持一致）
+function isTauri() {
+  return typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.dialog;
+}
+
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
@@ -30,7 +35,7 @@ $('loadSample').addEventListener('click', async () => {
   loadText(await res.text());
 });
 
-// 上传本地字幕文件
+// 上传本地字幕文件（浏览器回退）
 $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -38,7 +43,27 @@ $('fileInput').addEventListener('change', async (e) => {
   setStatus(`已加载文件：${f.name}（${editor.getItems().length} 条）`);
 });
 
-// 下载导出
+// 打开文件：Tauri 用原生对话框 + Rust 读取；浏览器用隐藏 fileInput 回退
+$('openFile').addEventListener('click', async () => {
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.open({
+        multiple: false,
+        filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'txt'] }],
+      });
+      if (!path) return;
+      const text = await window.__TAURI__.core.invoke('read_file', { path });
+      loadText(text);
+      setStatus(`已打开：${path}（${editor.getItems().length} 条）`);
+    } catch (e) {
+      setStatus('打开失败：' + (e?.message || e));
+    }
+  } else {
+    $('fileInput').click();
+  }
+});
+
+// 下载导出（浏览器回退）
 function download(filename, text) {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -49,14 +74,43 @@ function download(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-$('exportTranslate').addEventListener('click', () => {
-  download('subtitle_translated.srt', serializeSRT(editor.getItems(), { mode: 'translate' }));
-  setStatus('已导出翻译版 SRT');
-});
+// 导出：Tauri 用原生「另存为」对话框 + Rust 写入；浏览器用 Blob 下载
+async function doExport(mode, defaultName, okMsg) {
+  const text = serializeSRT(editor.getItems(), { mode });
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.save({
+        defaultPath: defaultName,
+        filters: [{ name: 'SubRip 字幕', extensions: ['srt'] }],
+      });
+      if (!path) return;
+      await window.__TAURI__.core.invoke('write_file', { path, contents: text });
+      setStatus(`已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存失败：' + (e?.message || e));
+    }
+  } else {
+    download(defaultName, text);
+    setStatus(okMsg);
+  }
+}
 
-$('exportBilingual').addEventListener('click', () => {
-  download('subtitle_bilingual.srt', serializeSRT(editor.getItems(), { mode: 'bilingual' }));
-  setStatus('已导出双语 SRT');
+$('exportTranslate').addEventListener('click', () =>
+  doExport('translate', 'subtitle_translated.srt', '已导出翻译版 SRT')
+);
+
+$('exportBilingual').addEventListener('click', () =>
+  doExport('bilingual', 'subtitle_bilingual.srt', '已导出双语 SRT')
+);
+
+// 拖拽文件到窗口即可打开（浏览器与 Tauri 通用：file.text() 读取内容）
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  loadText(await f.text());
+  setStatus(`已加载文件：${f.name}（${editor.getItems().length} 条）`);
 });
 
 // 翻译

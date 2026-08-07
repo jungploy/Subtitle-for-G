@@ -24,7 +24,8 @@ function copyDir(s, d) {
   }
 }
 
-fs.rmSync(dist, { recursive: true, force: true });
+// 注意：沙箱对 fs.rmSync 做了「安全删除（进回收站）」包裹，可能失败；
+// 这里改为直接覆盖，不再整体清空 dist（文件名集合稳定，覆盖即可）。
 fs.mkdirSync(dist, { recursive: true });
 for (const f of files) {
   const src = path.join(root, f);

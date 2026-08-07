@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "主窗口默认权限：允许基础窗口能力，自定义 translate 命令默认可调用",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

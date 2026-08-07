@@ -123,10 +123,23 @@ async fn translate_one(
     }
 }
 
+/// 读取文件内容（由原生「打开」对话框返回的 path 调用）
+#[tauri::command]
+fn read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
+}
+
+/// 写入文件内容（由原生「另存为」对话框返回的 path 调用）
+#[tauri::command]
+fn write_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("写入文件失败: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![translate])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![translate, read_file, write_file])
         .run(tauri::generate_context!())
         .expect("error while running Subtitle-for-G");
 }

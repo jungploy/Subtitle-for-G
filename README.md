@@ -50,7 +50,7 @@ Subtitle-for-G/
     ├── Cargo.toml
     ├── build.rs
     ├── icons/                 # 由 scripts/make-icon.cjs 生成
-    └── src/main.rs            # 入口 + translate 命令（Rust 内调用 API）
+    └── src/main.rs            # 入口 + translate / read_file / write_file 命令（Rust 内调用 API 与文件读写）；已注册 tauri-plugin-dialog
 ```
 
 ## 快速开始（浏览器预览）
@@ -61,7 +61,7 @@ python -m http.server 8000
 # 打开 http://localhost:8000
 ```
 
-打开后自动加载 `sample.srt`。你也可以点「上传」选择本地 `.srt` 文件。
+打开后自动加载 `sample.srt`。你也可以点「打开」选择本地 `.srt` 文件，或直接把文件**拖拽**到窗口里。
 
 ## 翻译接入
 
@@ -113,8 +113,8 @@ npm run tauri:dev
 ```
 
 ### 使用
-桌面端里操作与网页版完全一致：载入示例/上传 SRT → 编辑 → 选引擎翻译（默认免费 MyMemory，无需 Key）→ 导出译文版/双语版。
-导出会弹出系统保存对话框，落到你选的位置。
+桌面端里操作与网页版完全一致：载入示例 / 「打开」SRT（或把文件拖进窗口）→ 编辑 → 选引擎翻译（默认免费 MyMemory，无需 Key）→ 导出译文版 / 双语版。
+「打开」会弹出系统**打开文件**对话框、「导出」会弹出系统**另存为**对话框，文件读写都在 Rust 进程内完成，路径不离开本机。
 
 ## 提交规范
 
