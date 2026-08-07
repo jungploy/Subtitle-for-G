@@ -23,9 +23,13 @@ if not exist python_app\dist mkdir python_app\dist
 xcopy /E /I /Y dist\* python_app\dist\
 
 REM 5) 用 PyInstaller 打单文件可执行（--windowed 无控制台窗口）
+REM    --collect-submodules webview 确保把 pywebview 的 edgechromium 平台模块一并打进包，
+REM    否则打包后的 exe 在 Windows 上会报 ImportError / 无法创建窗口。
 pyinstaller --noconfirm --onefile --windowed ^
   --name Subtitle-for-G ^
   --distpath build_exe --workpath build_tmp ^
+  --hidden-import webview ^
+  --collect-submodules webview ^
   --add-data "python_app\dist;dist" ^
   python_app\main.py
 
