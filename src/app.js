@@ -126,7 +126,22 @@ $('exportBilingual').addEventListener('click', () =>
   doExport('bilingual', 'subtitle_bilingual.srt', '已导出双语 SRT')
 );
 
-// 拖拽文件到窗口即可打开（浏览器与 Tauri 通用：file.text() 读取内容）
+// 交换左右：把每一条的原文(source)与译文(target)互换后重渲染
+$('swapSides').addEventListener('click', () => {
+  const items = editor.getItems();
+  if (!items.length) {
+    setStatus('没有可交换的内容');
+    return;
+  }
+  items.forEach((it) => {
+    const t = it.source;
+    it.source = it.target;
+    it.target = t;
+  });
+  editor.setItems(items);
+  dirty = true;
+  setStatus('已交换左右内容（原文 ↔ 译文）');
+});
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
