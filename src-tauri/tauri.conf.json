@@ -4,14 +4,16 @@
   "version": "0.1.0",
   "identifier": "com.jungploy.subtitle-for-g",
   "build": {
-    "beforeDevCommand": "",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:8000",
-    "beforeBuildCommand": "",
-    "frontendDist": "../"
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Subtitle-for-G · 字幕双语编辑器",
         "width": 1100,
         "height": 720,
@@ -26,7 +28,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   },
-  "plugin": {}
+  "plugins": {}
 }

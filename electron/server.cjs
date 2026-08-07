@@ -11,7 +11,7 @@ const path = require('node:path');
 const { translate } = require('../server/translate-core.cjs');
 
 const ROOT = path.resolve(__dirname, '..'); // 项目根目录
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 8000;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

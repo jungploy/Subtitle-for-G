@@ -1,25 +1,126 @@
 // src-tauri/src/main.rs
-// 桌面端入口。负责：窗口、文件打开/保存、翻译命令（在本地安全调用 API，key 不进前端）。
-// 注：本文件在你的本地 Rust 环境中编译（需要 `cargo` 与系统 WebView）。
-// 沙箱环境未编译验证，仅提供可直接使用的骨架。
+// Tauri 2 桌面端入口：窗口 + 翻译命令（在本地 Rust 进程内调用翻译 API）。
+// 翻译命令由前端 window.__TAURI__.core.invoke('translate', ...) 调用。
+// 注：本文件在你的本地 Rust 环境中编译（需要 cargo 与系统 WebView2）。
+// 沙箱环境无 Rust 工具链，未做编译验证，仅提供可直接编译使用的实现。
 
-use tauri::Manager;
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[derive(serde::Serialize)]
-struct TranslateRequest {
+use serde::Deserialize;
+use serde_json::Value;
+
+#[derive(Deserialize)]
+struct TranslateArgs {
     lines: Vec<String>,
     provider: String,
+    #[serde(default)]
     api_key: String,
+    #[serde(default)]
     model: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
-/// 翻译命令：由前端 window.__TAURI__.invoke('translate', ...) 调用。
-/// 真实实现请用 reqwest 调用 OpenAI / DeepL（参考 README 的 Rust 片段）。
-/// 这里先返回错误，提醒接入网络调用，避免无网络时编译失败。
+/// 翻译命令：逐行翻译，返回与输入等长的译文数组。
 #[tauri::command]
-async fn translate(req: TranslateRequest) -> Result<Vec<String>, String> {
-    let _ = req;
-    Err("桌面端翻译命令请接入 reqwest 调用 OpenAI/DeepL（详见 README 的 Rust 示例）".into())
+async fn translate(args: TranslateArgs) -> Result<Vec<String>, String> {
+    let source = args.source.clone().unwrap_or_else(|| "en".to_string());
+    let target = args.target.clone().unwrap_or_else(|| "zh-CN".to_string());
+    let client = reqwest::Client::new();
+    let mut out = Vec::with_capacity(args.lines.len());
+    for line in &args.lines {
+        let t = translate_one(
+            &client,
+            line,
+            &args.provider,
+            &args.api_key,
+            &args.model,
+            &source,
+            &target,
+        )
+        .await?;
+        out.push(t);
+    }
+    Ok(out)
+}
+
+async fn translate_one(
+    client: &reqwest::Client,
+    line: &str,
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    source: &str,
+    target: &str,
+) -> Result<String, String> {
+    match provider {
+        "mymemory" => {
+            let pair = format!("{}|{}", source, target);
+            let resp: Value = client
+                .get("https://api.mymemory.translated.net/get")
+                .query(&[("q", line), ("langpair", &pair)])
+                .send()
+                .await
+                .map_err(|e| format!("MyMemory 请求失败: {}", e))?
+                .json()
+                .await
+                .map_err(|e| format!("MyMemory 解析失败: {}", e))?;
+            resp.get("responseData")
+                .and_then(|d| d.get("translatedText"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "MyMemory 返回格式异常".to_string())
+        }
+        "openai" => {
+            let m = if model.is_empty() { "gpt-4o-mini" } else { model };
+            let body = serde_json::json!({
+                "model": m,
+                "messages": [
+                    {"role": "system", "content": "You are a subtitle translator. Translate the user's subtitle line into Chinese. Output only the translation, no quotes, no explanations."},
+                    {"role": "user", "content": line}
+                ],
+                "temperature": 0.3
+            });
+            let resp: Value = client
+                .post("https://api.openai.com/v1/chat/completions")
+                .bearer_auth(api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("OpenAI 请求失败: {}", e))?
+                .json()
+                .await
+                .map_err(|e| format!("OpenAI 解析失败: {}", e))?;
+            resp.get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.trim().to_string())
+                .ok_or_else(|| "OpenAI 返回格式异常（检查 key / 模型）".to_string())
+        }
+        "deepl" => {
+            let resp: Value = client
+                .post("https://api-free.deepl.com/v2/translate")
+                .header("Authorization", format!("DeepL-Auth-Key {}", api_key))
+                .form(&[("text", line), ("target_lang", "ZH")])
+                .send()
+                .await
+                .map_err(|e| format!("DeepL 请求失败: {}", e))?
+                .json()
+                .await
+                .map_err(|e| format!("DeepL 解析失败: {}", e))?;
+            resp.get("translations")
+                .and_then(|t| t.get(0))
+                .and_then(|t| t.get("text"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "DeepL 返回格式异常（检查 key）".to_string())
+        }
+        other => Err(format!("未知翻译引擎: {}", other)),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

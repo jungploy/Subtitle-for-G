@@ -2,16 +2,17 @@
   "name": "subtitle-for-g",
   "version": "0.1.0",
   "private": true,
-  "description": "双语字幕编辑器（Web 原型 + Electron 桌面端）",
-  "main": "electron/main.js",
+  "description": "双语字幕编辑器（Web 原型 + Tauri 桌面端，单文件可执行）",
+  "type": "module",
   "scripts": {
-    "start": "electron .",
-    "web:proxy": "node server/translate-proxy.mjs",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dev": "node electron/server.cjs",
+    "build": "node scripts/build-frontend.cjs",
+    "icons": "node scripts/make-icon.cjs",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "@tauri-apps/cli": "^2.0.0"
   }
 }

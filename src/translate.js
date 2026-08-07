@@ -1,11 +1,17 @@
 // src/translate.js
-// 翻译抽象层：manual / mock / openai / deepl
+// 翻译抽象层：manual / mock / 真实(my memory / openai / deepl)
 //
-// Web 版经本地代理 server/translate-proxy.mjs 转发，
-// 避免 API key 暴露在浏览器、规避 CORS。
-// 桌面版（Tauri）可改为调用 window.__TAURI__.invoke('translate', ...)（见文件底部注释）。
+// - 浏览器 / Web 预览：走本地代理 server/translate-proxy.mjs（key 不进前端、规避 CORS）
+// - 桌面端（Tauri 原生窗口）：检测到 window.__TAURI__ 时改为 invoke('translate')，
+//   翻译在 Rust 本地进程完成，同样不暴露 key、无 CORS。
 
 const DEFAULT_ENDPOINT = 'http://localhost:8787/api/translate';
+const SOURCE_LANG = 'en';
+const TARGET_LANG = 'zh-CN';
+
+function isTauri() {
+  return typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core;
+}
 
 export async function translateLines(lines, opts = {}, onStatus) {
   const { provider = 'mock', apiKey = '', model = '' } = opts;
@@ -20,7 +26,27 @@ export async function translateLines(lines, opts = {}, onStatus) {
     return lines.map((l) => (l ? `[译] ${l}` : ''));
   }
 
-  // 真实翻译：走本地代理
+  // 桌面端（Tauri）：交给 Rust 本地进程翻译，无需代理、无需 endpoint
+  if (isTauri()) {
+    onStatus && onStatus(`正在通过 ${provider} 翻译 ${lines.length} 条…`);
+    try {
+      const translations = await window.__TAURI__.core.invoke('translate', {
+        lines,
+        provider,
+        apiKey,
+        model,
+        source: SOURCE_LANG,
+        target: TARGET_LANG,
+      });
+      return translations;
+    } catch (e) {
+      const msg = typeof e === 'string' ? e : e && e.message ? e.message : String(e);
+      onStatus && onStatus(`翻译失败：${msg}`);
+      throw e;
+    }
+  }
+
+  // Web 版：走本地代理
   const endpoint =
     (typeof window !== 'undefined' && window.__TRANSLATE_ENDPOINT__) || DEFAULT_ENDPOINT;
   onStatus && onStatus(`正在通过 ${provider} 翻译 ${lines.length} 条…`);
@@ -42,21 +68,3 @@ export async function translateLines(lines, opts = {}, onStatus) {
     throw e;
   }
 }
-
-/*
- * 桌面版（Tauri）接入示例 —— 在 src-tauri 的权限中开放「translate」命令后使用：
- *
- * export async function translateLines(lines, opts = {}, onStatus) {
- *   const { provider = 'mock', apiKey = '', model = '' } = opts;
- *   if (provider === 'manual' || provider === 'mock') {
- *     if (provider === 'manual') { onStatus && onStatus('手动模式'); return lines.slice(); }
- *     onStatus && onStatus('演示翻译（mock）');
- *     return lines.map((l) => (l ? `[译] ${l}` : ''));
- *   }
- *   onStatus && onStatus(`正在通过 ${provider} 翻译…`);
- *   const translations = await window.__TAURI__.invoke('translate', {
- *     lines, provider, apiKey, model,
- *   });
- *   return translations;
- * }
- */
