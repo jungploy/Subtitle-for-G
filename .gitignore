@@ -2,3 +2,10 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+# 沙箱编译尝试残留（不应提交）
+rustup-init.exe
+_rustup-init.exe
+llvm-mingw.zip
+_rustup_install.log
+.cargo/
+.rustup/
