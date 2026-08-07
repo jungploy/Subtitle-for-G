@@ -9,3 +9,12 @@ llvm-mingw.zip
 _rustup_install.log
 .cargo/
 .rustup/
+
+# Python / PyInstaller 产物
+.venv/
+__pycache__/
+*.pyc
+python_app/dist/
+build_exe/
+build_tmp/
+*.spec

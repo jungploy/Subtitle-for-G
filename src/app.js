@@ -18,6 +18,10 @@ function isTauri() {
   return typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.dialog;
 }
 
+function isPyWebView() {
+  return typeof window !== 'undefined' && window.pywebview && window.pywebview.api;
+}
+
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
@@ -43,7 +47,8 @@ $('fileInput').addEventListener('change', async (e) => {
   setStatus(`已加载文件：${f.name}（${editor.getItems().length} 条）`);
 });
 
-// 打开文件：Tauri 用原生对话框 + Rust 读取；浏览器用隐藏 fileInput 回退
+// 打开文件：Tauri 用原生对话框 + Rust 读取；pywebview 用 Python 原生对话框；
+// 浏览器用隐藏 fileInput 回退
 $('openFile').addEventListener('click', async () => {
   if (isTauri()) {
     try {
@@ -55,6 +60,15 @@ $('openFile').addEventListener('click', async () => {
       const text = await window.__TAURI__.core.invoke('read_file', { path });
       loadText(text);
       setStatus(`已打开：${path}（${editor.getItems().length} 条）`);
+    } catch (e) {
+      setStatus('打开失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const r = await window.pywebview.api.open_file();
+      if (!r) return;
+      loadText(r.text);
+      setStatus(`已打开：${r.path}（${editor.getItems().length} 条）`);
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
     }
@@ -74,7 +88,7 @@ function download(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-// 导出：Tauri 用原生「另存为」对话框 + Rust 写入；浏览器用 Blob 下载
+// 导出：Tauri/pywebview 用原生「另存为」对话框 + 本地写入；浏览器用 Blob 下载
 async function doExport(mode, defaultName, okMsg) {
   const text = serializeSRT(editor.getItems(), { mode });
   if (isTauri()) {
@@ -85,6 +99,14 @@ async function doExport(mode, defaultName, okMsg) {
       });
       if (!path) return;
       await window.__TAURI__.core.invoke('write_file', { path, contents: text });
+      setStatus(`已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const path = await window.pywebview.api.save_as(defaultName, text);
+      if (!path) return;
       setStatus(`已保存到：${path}`);
     } catch (e) {
       setStatus('保存失败：' + (e?.message || e));

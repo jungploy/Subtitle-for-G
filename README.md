@@ -7,7 +7,8 @@
 - 原文 / 翻译**均可编辑**（方便校对与补全）
 - 翻译可**手动输入**，也能**一键调用 AI**（OpenAI / DeepL），还内置**免费无需 Key 的 MyMemory** 引擎
 - 可导出**翻译版 SRT** 或**双语 SRT**
-- 提供 **Tauri（Rust）桌面端**：编译为**单个原生可执行文件**，翻译在本地进程完成，无 CORS、不暴露 key
+- 提供 **Python（pywebview）桌面端**：打包为**单个 `.exe`**，底层用系统自带的 Edge WebView2，**无需 Rust / Visual Studio**，翻译在本地进程完成，无 CORS、不暴露 key
+- （另有 **Tauri（Rust）** 桌面端方案，见文末「备选方案」）
 
 ## 核心交互
 
@@ -23,7 +24,8 @@
 - 前端：**原生 JavaScript（ES Modules）+ HTML + CSS**，零构建、零依赖
 - 预览 / 开发：任意静态服务器（如 `python -m http.server` 或自带 `npm run dev`）
 - 翻译逻辑：`server/translate-core.cjs`（Web 代理共用）；Web 原型由 `server/translate-proxy.mjs` 转发
-- 桌面化：**Tauri 2（Rust）** —— 原生窗口 + Rust 本地进程调用翻译 API，编译为单个 `.exe`
+- 桌面化（**主方案 · Python**）：**pywebview** —— 用系统自带的 Edge WebView2 开原生窗口，Python 本地进程完成翻译与文件读写，**无需 Rust / VS**，一条 `pyinstaller` 命令出单个 `.exe`
+- （备选：Tauri 2（Rust）方案见文末）
 
 ## 目录结构
 
@@ -34,14 +36,18 @@ Subtitle-for-G/
 ├── src/
 │   ├── srt.js                 # SRT 解析 / 序列化
 │   ├── editor.js              # 双语编辑器（选中联动 + 滚动对齐 + 编辑）
-│   ├── translate.js           # 翻译抽象层（自动识别 Tauri / 浏览器）
+│   ├── translate.js           # 翻译抽象层（自动识别 pywebview / Tauri / 浏览器）
 │   └── app.js                 # 应用主逻辑（加载/导出/翻译按钮）
 ├── server/
 │   ├── translate-core.cjs     # 翻译核心逻辑（Web 与桌面共用）
 │   └── translate-proxy.mjs    # 本地翻译代理（仅 Web 原型用；桌面端走 Rust，不经此代理）
 ├── electron/server.cjs        # 仅用于 `npm run dev` 起一个静态开发服务器
+├── python_app/                # Python(pywebview) 桌面壳
+│   ├── main.py                # 本地服务器 + pywebview 窗口 + 暴露 translate/open_file/save_as
+│   └── requirements.txt       # pywebview, pyinstaller
+├── build-exe.bat              # 一键打包单文件 .exe（Python 方案）
 ├── scripts/
-│   ├── build-frontend.cjs     # 复制前端到 dist/（Tauri 打包用）
+│   ├── build-frontend.cjs     # 复制前端到 dist/（打包用）
 │   └── make-icon.cjs          # 生成 Tauri 图标（无第三方依赖）
 ├── sample.srt                 # 示例字幕
 └── src-tauri/                 # Tauri 桌面工程（Rust）
@@ -82,39 +88,62 @@ python -m http.server 8000
 > ```
 > 桌面端（Tauri）**不需要代理**——翻译在 Rust 进程里直接调用，key 只存在你本机内存。
 
-## 桌面版（Tauri，推荐 · 单文件可执行）
+## 桌面版（Python pywebview，推荐 · 单文件可执行）
 
-把网页直接编译为**原生窗口应用**，产物是单个 `.exe`（Windows 上还依赖系统自带的 WebView2，Win10/11 已预装）。
+把网页套一个轻量 Python 壳，编译为**原生窗口应用**，产物是单个 `.exe`。
+底层用系统自带的 **Edge WebView2**（Win10/11 已预装，无需下载 Electron 那一百多 MB），
+**不需要 Rust、不需要 Visual Studio**。翻译与文件打开/保存都在 Python 本地进程完成，API Key 只留存本机内存。
 
-### 1. 安装前置依赖（一次性）
-- **Rust 工具链**：https://rustup.rs （安装后确保 `cargo` 可用）
-- **系统 WebView2**：Win10/11 通常已自带；否则从微软官网装 "WebView2 Runtime"
-- **C++ 构建工具**（Windows）：装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 勾选「使用 C++ 的桌面开发」
-- **Node**（仅用于跑脚本生成 dist/ 与图标，不参与运行）
+### 1. 安装前置（一次性）
+- **Python 3.10+**：https://www.python.org （安装时勾选 "Add python.exe to PATH"）
+- **Node**：仅用于生成前端 `dist/`（参与构建，不参与运行）；若已装可跳过
+- 系统 **WebView2 Runtime**：Win10/11 已自带；没有就从微软官网装
 
-### 2. 安装并构建
+### 2. 一键构建（双击 `build-exe.bat` 即可）
 ```bash
 cd Subtitle-for-G
-npm install                 # 仅装 @tauri-apps/cli（小体积）
-npm run icons              # 生成 src-tauri/icons 下的图标（可选，已生成过可跳过）
-npm run build              # 复制前端到 dist/（Tauri 打包需要）
-npm run tauri:build        # 编译 Rust → 产出单文件可执行
+build-exe.bat
 ```
+脚本会自动：建虚拟环境 → `pip install -r python_app/requirements.txt` → `npm run build` →
+把前端拷进 `python_app/dist` → `pyinstaller --onefile --windowed` 出包。
+
+> 想手动分步也行：
+> ```bash
+> python -m venv .venv && call .venv\Scripts\activate.bat
+> pip install -r python_app/requirements.txt
+> npm run build
+> xcopy /E /I /Y dist\* python_app\dist\
+> pyinstaller --noconfirm --onefile --windowed --name Subtitle-for-G ^
+>   --distpath build_exe --workpath build_tmp --add-data "python_app\dist;dist" python_app\main.py
+> ```
 
 ### 3. 产物位置
 ```
-src-tauri/target/release/Subtitle-for-G.exe     <-- 这就是单文件可执行，可直接双击运行/分发
-src-tauri/target/release/bundle/...             # 同时还会生成安装包（msi/nsis），不需要可忽略
+build_exe\Subtitle-for-G.exe     <-- 单文件可执行，可直接双击运行/分发（无需安装 Python）
 ```
 
-### 4. 开发预览（热重载窗口）
+### 4. 开发预览（不打包，直接跑）
 ```bash
-npm run tauri:dev
+npm run build
+python python_app/main.py        # 直接开原生窗口加载本地前端
 ```
 
 ### 使用
-桌面端里操作与网页版完全一致：载入示例 / 「打开」SRT（或把文件拖进窗口）→ 编辑 → 选引擎翻译（默认免费 MyMemory，无需 Key）→ 导出译文版 / 双语版。
-「打开」会弹出系统**打开文件**对话框、「导出」会弹出系统**另存为**对话框，文件读写都在 Rust 进程内完成，路径不离开本机。
+桌面端里操作与网页版完全一致：载入示例 / 「打开」SRT（或把文件拖进窗口）→ 编辑 →
+选引擎翻译（默认免费 MyMemory，无需 Key）→ 导出译文版 / 双语版。
+「打开」「导出」弹出系统**文件对话框**，文件读写都在 Python 进程内完成，路径不离开本机。
+
+## 备选方案：桌面版（Tauri，Rust）
+
+若你偏好 Rust 技术栈，也可用 **Tauri 2** 编译为单个 `.exe`（需要 Rust 工具链 + C++ 构建工具 + WebView2）：
+
+```bash
+npm install
+npm run icons
+npm run build
+npm run tauri:build          # 产物：src-tauri/target/release/Subtitle-for-G.exe
+```
+> 注意：Tauri 编译需要本机具备 Rust + MSVC 链接器，环境门槛比 Python 方案高。
 
 ## 提交规范
 

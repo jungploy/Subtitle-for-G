@@ -4,6 +4,8 @@
 // - 浏览器 / Web 预览：走本地代理 server/translate-proxy.mjs（key 不进前端、规避 CORS）
 // - 桌面端（Tauri 原生窗口）：检测到 window.__TAURI__ 时改为 invoke('translate')，
 //   翻译在 Rust 本地进程完成，同样不暴露 key、无 CORS。
+// - 桌面端（Python pywebview 壳）：检测到 window.pywebview.api 时改为调用
+//   window.pywebview.api.translate(...)，翻译在 Python 本地进程完成，同样不暴露 key。
 
 const DEFAULT_ENDPOINT = 'http://localhost:8787/api/translate';
 const SOURCE_LANG = 'en';
@@ -11,6 +13,10 @@ const TARGET_LANG = 'zh-CN';
 
 function isTauri() {
   return typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core;
+}
+
+function isPyWebView() {
+  return typeof window !== 'undefined' && window.pywebview && window.pywebview.api;
 }
 
 export async function translateLines(lines, opts = {}, onStatus) {
@@ -38,6 +44,29 @@ export async function translateLines(lines, opts = {}, onStatus) {
         source: SOURCE_LANG,
         target: TARGET_LANG,
       });
+      return translations;
+    } catch (e) {
+      const msg = typeof e === 'string' ? e : e && e.message ? e.message : String(e);
+      onStatus && onStatus(`翻译失败：${msg}`);
+      throw e;
+    }
+  }
+
+  // 桌面端（Python pywebview 壳）：交给 Python 本地进程翻译
+  if (isPyWebView()) {
+    onStatus && onStatus(`正在通过 ${provider} 翻译 ${lines.length} 条…`);
+    try {
+      const translations = await window.pywebview.api.translate({
+        lines,
+        provider,
+        apiKey,
+        model,
+        source: SOURCE_LANG,
+        target: TARGET_LANG,
+      });
+      if (translations && translations.error) {
+        throw new Error(translations.error);
+      }
       return translations;
     } catch (e) {
       const msg = typeof e === 'string' ? e : e && e.message ? e.message : String(e);
