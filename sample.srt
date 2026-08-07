@@ -1,0 +1,34 @@
+1
+00:00:01,000 --> 00:00:04,500
+Hey, welcome to the workshop.
+Today we're building something together.
+
+2
+00:00:05,000 --> 00:00:09,000
+This is a subtitle translation tool.
+Left side shows the original text.
+
+3
+00:00:09,500 --> 00:00:13,000
+The right side is where your translation goes.
+Each line lines up, row by row.
+
+4
+00:00:13,500 --> 00:00:17,000
+Click any line on either side.
+Both sides highlight the matching row.
+
+5
+00:00:17,500 --> 00:00:21,000
+When you're done, export the translated SRT.
+Or keep both languages side by side.
+
+6
+00:00:21,500 --> 00:00:25,000
+You can also call an AI translator with one click.
+Just paste your API key above.
+
+7
+00:00:25,500 --> 00:00:29,000
+Let's make subtitle translation painless.
+Enjoy the demo.

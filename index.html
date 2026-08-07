@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subtitle-for-G · 字幕双语编辑器</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="toolbar">
+      <h1>Subtitle-for-G</h1>
+      <button id="loadSample">加载示例</button>
+      <label>上传 <input type="file" id="fileInput" accept=".srt,.vtt,.txt" /></label>
+      <span style="flex: 1"></span>
+      <label>翻译引擎
+        <select id="provider">
+          <option value="manual">手动</option>
+          <option value="mock">演示(mock)</option>
+          <option value="openai">OpenAI</option>
+          <option value="deepl">DeepL</option>
+        </select>
+      </label>
+      <label>API Key <input type="text" id="apiKey" placeholder="粘贴你的 key" /></label>
+      <label>模型 <input type="text" id="model" placeholder="如 gpt-4o-mini" /></label>
+      <button id="translateSelected">翻译选中行</button>
+      <button id="translateAll" class="primary">翻译全部</button>
+      <button id="exportBilingual">导出双语</button>
+      <button id="exportTranslate">导出译文</button>
+    </div>
+    <div class="status" id="status">就绪</div>
+    <div id="editorMount"></div>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>
