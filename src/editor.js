@@ -89,18 +89,24 @@ export function createEditor(container, { onChange } = {}) {
     if (activeIndex >= 0) highlight(activeIndex);
   }
 
-  // 让左右同一行高度一致（取两侧最大值），保证逐行严格对齐；
-  // 同时把左侧时间码行高度也拉到同一高度，三栏对齐。
+  // 让三栏同一行高度一致：取「原文文本框 / 译文文本框 / 时间码行」三者自然高度的最大值，
+  // 保证逐行严格对齐。注意时间码行本身含 3 行文字、且带 1px 下边框，必须纳入计算，
+  // 否则会被压低导致内容溢出、与右两栏不在同一水平线上。
   function syncRowHeight(i) {
     const s = rowsSource.children[i]?.querySelector('.line');
     const t = rowsTarget.children[i]?.querySelector('.line');
+    const timeRow = rowsTime.children[i];
     if (!s || !t) return;
+    // 先还原为 auto，才能测得真实自然高度
     s.style.height = 'auto';
     t.style.height = 'auto';
-    const h = Math.max(s.scrollHeight, t.scrollHeight);
+    if (timeRow) timeRow.style.height = 'auto';
+    const hs = s.scrollHeight;
+    const ht = t.scrollHeight;
+    const htrow = timeRow ? timeRow.scrollHeight + 1 : 0; // +1 补偿时间行 1px 下边框
+    const h = Math.max(hs, ht, htrow, 28);
     s.style.height = h + 'px';
     t.style.height = h + 'px';
-    const timeRow = rowsTime.children[i];
     if (timeRow) timeRow.style.height = h + 'px';
   }
   function syncAllHeights() {
@@ -135,6 +141,11 @@ export function createEditor(container, { onChange } = {}) {
   [rowsTime, rowsSource, rowsTarget].forEach((p) =>
     p.addEventListener('scroll', () => syncScroll(p))
   );
+
+  // 窗口缩放 / 字体晚加载时重新对齐三栏行高，防止对齐漂移
+  window.addEventListener('resize', syncAllHeights);
+  // 延迟一帧再算一次，规避首帧字体/布局未稳定导致的测高偏差
+  requestAnimationFrame(syncAllHeights);
 
   // 选中第 i 行：三栏高亮，且都滚动到该行居中 —— 清晰对应
   function setActive(i) {
