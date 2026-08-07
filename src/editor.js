@@ -1,9 +1,14 @@
 // src/editor.js
-// 双语逐行编辑器：左右两栏按行索引对齐，选中联动高亮 + 滚动对齐，原文/翻译均可编辑。
+// 双语逐行编辑器：左侧时间码面板 + 左原文 / 右译文 两栏按行索引对齐，
+// 选中联动高亮 + 滚动对齐，原文/翻译均可编辑。
 
 export function createEditor(container, { onChange } = {}) {
   container.innerHTML = `
     <div class="editor">
+      <div class="pane timeline">
+        <div class="pane-title">序号 · 时间码</div>
+        <div class="rows" id="rowsTime"></div>
+      </div>
       <div class="pane">
         <div class="pane-title">原文 · Source</div>
         <div class="rows" id="rowsSource"></div>
@@ -14,19 +19,17 @@ export function createEditor(container, { onChange } = {}) {
       </div>
     </div>`;
 
+  const rowsTime = container.querySelector('#rowsTime');
   const rowsSource = container.querySelector('#rowsSource');
   const rowsTarget = container.querySelector('#rowsTarget');
   let items = [];
   let activeIndex = -1;
+  let scrollLock = false;
 
   function makeRow(i, value, cls, placeholder) {
     const row = document.createElement('div');
     row.className = 'row';
     row.dataset.index = i;
-
-    const badge = document.createElement('div');
-    badge.className = 'badge';
-    badge.textContent = i + 1;
 
     const ta = document.createElement('textarea');
     ta.className = 'line ' + cls;
@@ -35,7 +38,6 @@ export function createEditor(container, { onChange } = {}) {
     ta.spellcheck = false;
 
     const field = cls === 'source-line' ? 'source' : 'target';
-    const side = cls === 'source-line' ? 'source' : 'target';
 
     ta.addEventListener('input', () => {
       items[i][field] = ta.value;
@@ -45,15 +47,41 @@ export function createEditor(container, { onChange } = {}) {
     ta.addEventListener('focus', () => setActive(i));
     ta.addEventListener('click', () => setActive(i));
 
-    row.appendChild(badge);
     row.appendChild(ta);
     return row;
   }
 
+  // 左侧时间码面板的一行：序号 / 起始 / 结束
+  function makeTimeRow(i, it) {
+    const row = document.createElement('div');
+    row.className = 'time-row';
+    row.dataset.index = i;
+
+    const idx = document.createElement('div');
+    idx.className = 'tc-index';
+    idx.textContent = '#' + (it.index ?? i + 1);
+
+    const start = document.createElement('div');
+    start.className = 'tc-start';
+    start.textContent = it.start || '';
+
+    const end = document.createElement('div');
+    end.className = 'tc-end';
+    end.textContent = it.end || '';
+
+    row.appendChild(idx);
+    row.appendChild(start);
+    row.appendChild(end);
+    row.addEventListener('click', () => setActive(i));
+    return row;
+  }
+
   function render() {
+    rowsTime.innerHTML = '';
     rowsSource.innerHTML = '';
     rowsTarget.innerHTML = '';
     items.forEach((it, i) => {
+      rowsTime.appendChild(makeTimeRow(i, it));
       rowsSource.appendChild(makeRow(i, it.source, 'source-line', ''));
       rowsTarget.appendChild(makeRow(i, it.target, 'target-line', '在此输入翻译…'));
     });
@@ -61,7 +89,8 @@ export function createEditor(container, { onChange } = {}) {
     if (activeIndex >= 0) highlight(activeIndex);
   }
 
-  // 让左右同一行高度一致（取两侧最大值），保证逐行严格对齐
+  // 让左右同一行高度一致（取两侧最大值），保证逐行严格对齐；
+  // 同时把左侧时间码行高度也拉到同一高度，三栏对齐。
   function syncRowHeight(i) {
     const s = rowsSource.children[i]?.querySelector('.line');
     const t = rowsTarget.children[i]?.querySelector('.line');
@@ -71,17 +100,18 @@ export function createEditor(container, { onChange } = {}) {
     const h = Math.max(s.scrollHeight, t.scrollHeight);
     s.style.height = h + 'px';
     t.style.height = h + 'px';
+    const timeRow = rowsTime.children[i];
+    if (timeRow) timeRow.style.height = h + 'px';
   }
   function syncAllHeights() {
     for (let i = 0; i < items.length; i++) syncRowHeight(i);
   }
 
   function highlight(i) {
-    rowsSource.querySelectorAll('.row').forEach((r) =>
-      r.classList.toggle('active', +r.dataset.index === i)
-    );
-    rowsTarget.querySelectorAll('.row').forEach((r) =>
-      r.classList.toggle('active', +r.dataset.index === i)
+    [rowsTime, rowsSource, rowsTarget].forEach((pane) =>
+      pane.querySelectorAll('.row, .time-row').forEach((r) =>
+        r.classList.toggle('active', +r.dataset.index === i)
+      )
     );
   }
 
@@ -92,10 +122,25 @@ export function createEditor(container, { onChange } = {}) {
     pane.scrollTop = el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2;
   }
 
-  // 选中第 i 行：两侧高亮，且两侧都滚动到该行居中 —— 清晰对应
+  // 三栏滚动联动：任一栏滚动，其余同步
+  function syncScroll(srcPane) {
+    if (scrollLock) return;
+    scrollLock = true;
+    const top = srcPane.scrollTop;
+    [rowsTime, rowsSource, rowsTarget].forEach((p) => {
+      if (p !== srcPane) p.scrollTop = top;
+    });
+    scrollLock = false;
+  }
+  [rowsTime, rowsSource, rowsTarget].forEach((p) =>
+    p.addEventListener('scroll', () => syncScroll(p))
+  );
+
+  // 选中第 i 行：三栏高亮，且都滚动到该行居中 —— 清晰对应
   function setActive(i) {
     activeIndex = i;
     highlight(i);
+    scrollPaneToRow(rowsTime, i);
     scrollPaneToRow(rowsSource, i);
     scrollPaneToRow(rowsTarget, i);
   }
@@ -129,21 +174,32 @@ export function createEditor(container, { onChange } = {}) {
 
   // 查找高亮：高亮第 i 行指定一侧，并清除上一次高亮
   let matchEl = null;
+  let matchTimeEl = null;
   function clearMatch() {
     if (matchEl) {
       matchEl.classList.remove('match');
       matchEl = null;
+    }
+    if (matchTimeEl) {
+      matchTimeEl.classList.remove('match');
+      matchTimeEl = null;
     }
   }
   function setMatch(i, side) {
     clearMatch();
     const pane = side === 'source' ? rowsSource : rowsTarget;
     const row = pane.children[i];
-    if (!row) return;
-    const ta = row.querySelector('.line');
-    if (ta) {
-      ta.classList.add('match');
-      matchEl = ta;
+    if (row) {
+      const ta = row.querySelector('.line');
+      if (ta) {
+        ta.classList.add('match');
+        matchEl = ta;
+      }
+    }
+    const trow = rowsTime.children[i];
+    if (trow) {
+      trow.classList.add('match');
+      matchTimeEl = trow;
     }
     setActive(i);
   }

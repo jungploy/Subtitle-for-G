@@ -244,11 +244,51 @@ button.primary:hover {
   background: transparent;
   font: inherit;
   font-size: 14px;
-  line-height: 1.5;
-  padding: 8px 12px;
+  line-height: 1.4;
+  padding: 4px 10px;
   color: var(--text);
   overflow: hidden;
-  min-height: 38px;
+  min-height: 28px;
+}
+
+/* 左侧时间码面板 */
+.pane.timeline {
+  flex: 0 0 138px;
+  min-width: 0;
+}
+
+.time-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  border-bottom: 1px solid #f0f2f5;
+  border-left: 3px solid transparent;
+}
+
+.time-row .tc-index {
+  font-weight: 600;
+  color: #5a6069;
+}
+
+.time-row .tc-start,
+.time-row .tc-end {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: #8a9099;
+}
+
+.time-row.active {
+  background: var(--active-bg);
+  border-left-color: var(--active-border);
+}
+
+.time-row.match {
+  box-shadow: inset 3px 0 0 #f5a623;
 }
 
 .line::placeholder {
