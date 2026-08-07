@@ -1,0 +1,17 @@
+{
+  "name": "subtitle-for-g",
+  "version": "0.1.0",
+  "private": true,
+  "description": "双语字幕编辑器（Web 原型 + Electron 桌面端）",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "web:proxy": "node server/translate-proxy.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

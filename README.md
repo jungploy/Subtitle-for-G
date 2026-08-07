@@ -5,9 +5,9 @@
 
 - 支持 **SRT** 字幕（解析时间轴与文本）
 - 原文 / 翻译**均可编辑**（方便校对与补全）
-- 翻译可**手动输入**，也可**一键调用 AI**（OpenAI / DeepL）
+- 翻译可**手动输入**，也能**一键调用 AI**（OpenAI / DeepL），还内置**免费无需 Key 的 MyMemory** 引擎
 - 可导出**翻译版 SRT** 或**双语 SRT**
-- 桌面端用 **Tauri** 打包（Rust 端安全保管 API key、调用翻译）
+- 提供 **Electron 桌面端**（原生窗口，翻译在本地进程完成，无 CORS、不暴露 key）
 
 ## 核心交互
 
@@ -22,8 +22,9 @@
 
 - 前端：**原生 JavaScript（ES Modules）+ HTML + CSS**，零构建、零依赖
 - 预览 / 开发：任意静态服务器（如 `python -m http.server`）
-- 翻译（Web 原型）：本地 **Node 代理** `server/translate-proxy.mjs` 转发，key 不进浏览器
-- 桌面化：**Tauri 2**（Rust 端负责文件读写与翻译调用）
+- 翻译（Web / 桌面共用）：`server/translate-core.cjs` 统一逻辑；Web 原型由 `server/translate-proxy.mjs` 转发，key 不进浏览器
+- 桌面化：**Electron**（原生窗口 + 内嵌本地服务，零 Rust 依赖）
+- （`src-tauri/` 为早期 Tauri 试验配置，可忽略）
 
 ## 目录结构
 
@@ -37,13 +38,13 @@ Subtitle-for-G/
 │   ├── translate.js           # 翻译抽象层（manual/mock/openai/deepl）
 │   └── app.js                 # 应用主逻辑（加载/导出/翻译按钮）
 ├── server/
+│   ├── translate-core.cjs     # 翻译核心逻辑（Web 与桌面共用）
 │   └── translate-proxy.mjs    # 本地翻译代理（Web 原型用）
+├── electron/
+│   ├── main.js                # 桌面入口：打开原生窗口
+│   └── server.cjs             # 内嵌本地服务（静态文件 + /api/translate）
 ├── sample.srt                 # 示例字幕
-└── src-tauri/                 # 桌面化配置（Tauri 2）
-    ├── tauri.conf.json
-    ├── Cargo.toml
-    ├── build.rs
-    └── src/main.rs
+└── src-tauri/                 # （可选）早期 Tauri 试验配置，可忽略
 ```
 
 ## 快速开始（浏览器预览）
@@ -64,6 +65,7 @@ python -m http.server 8000
 | --- | --- |
 | 手动 | 直接在右侧文本框输入翻译 |
 | 演示(mock) | 不联网，给每行加 `[译]` 前缀，用于体验完整流程 |
+| 免费 MyMemory | 公共免费翻译 API，**无需 Key**，默认引擎，适合快速出稿 |
 | OpenAI | 走本地代理调用 OpenAI 兼容接口 |
 | DeepL | 走本地代理调用 DeepL 接口 |
 
@@ -83,18 +85,31 @@ export DEEPL_API_KEY=xxxx            # DeepL
 
 代理起来后，在网页选对应引擎、填 key（或留空走环境变量），点「翻译全部」即可。
 
-## 桌面化打包（Tauri）
+## 桌面版（Electron，推荐）
 
-前端是纯静态文件，可直接用 Tauri 包成 Windows / macOS 窗口应用。
-桌面端由 Rust 在本地调用翻译 API，key 更安全，且能直接读写字幕文件。
+把上面的网页直接包成**原生窗口**应用：翻译在本地进程完成（不走外部代理、不暴露 key、无 CORS），
+文件打开用系统原生对话框，保存走浏览器下载。只需 Node，无需安装 Rust。
 
-1. 安装 [Rust](https://www.rust-lang.org/) 与 [Tauri 预置依赖](https://v2.tauri.app/start/prerequisites/)
-2. 安装前端 CLI：`npm install`（或直接用现有静态文件，无需构建）
-3. 开发预览：`npm run tauri dev`
-4. 打包成安装包：`npm run tauri build`
+```bash
+cd Subtitle-for-G
+npm install          # 安装 electron（仅需一次，约 100MB）
+npm start            # 启动桌面程序（自动开一个原生窗口加载应用）
+```
 
-`src-tauri/src/main.rs` 已预留 `translate` 命令（前端用 `window.__TAURI__.invoke('translate', ...)` 调用）。
-把里面的 `reqwest` 调用补全即可对接 OpenAI / DeepL；文件打开/保存可接 Tauri 的 `dialog` 插件。
+构建可分发的安装包（可选）：
+
+```bash
+npm run dist         # 由 electron-builder 产出对应平台的安装包
+```
+
+> 说明：桌面端内嵌服务默认也用 `http://localhost:8787`，前端代码**无需任何改动**。
+> 保存字幕会落到系统「下载」文件夹（如需原生「另存为」对话框，后续可接入 `electron.dialog`）。
+> 当前默认引擎即「免费 MyMemory」，开箱即可一键翻译，无需任何 Key。
+
+## 桌面化打包（Tauri，可选）
+
+早期还试过用 Tauri 2（Rust）打包，配置留在 `src-tauri/`，但本项目当前桌面方案以 Electron 为主，
+该目录可忽略，或自行补全 `translate` 命令与 `dialog` 插件后使用。
 
 ## 提交规范
 
