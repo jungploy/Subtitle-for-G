@@ -27,24 +27,25 @@ function setStatus(msg) {
 }
 
 async function loadText(text) {
-  const items = parseSRT(text);
+  const { items, bilingual } = parseSRT(text);
   editor.setItems(items);
   dirty = false;
-  setStatus(`已加载 ${items.length} 条字幕`);
+  return { count: items.length, bilingual };
 }
 
 // 加载内置示例
 $('loadSample').addEventListener('click', async () => {
   const res = await fetch('sample.srt');
-  loadText(await res.text());
+  const r = await loadText(await res.text());
+  setStatus(`已加载示例 ${r.count} 条${r.bilingual ? '（已识别双语，分列两侧）' : ''}`);
 });
 
 // 上传本地字幕文件（浏览器回退）
 $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  loadText(await f.text());
-  setStatus(`已加载文件：${f.name}（${editor.getItems().length} 条）`);
+  const r = await loadText(await f.text());
+  setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
 // 打开文件：Tauri 用原生对话框 + Rust 读取；pywebview 用 Python 原生对话框；
@@ -58,8 +59,8 @@ $('openFile').addEventListener('click', async () => {
       });
       if (!path) return;
       const text = await window.__TAURI__.core.invoke('read_file', { path });
-      loadText(text);
-      setStatus(`已打开：${path}（${editor.getItems().length} 条）`);
+      const r = await loadText(text);
+      setStatus(`已打开：${path}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
     }
@@ -67,8 +68,8 @@ $('openFile').addEventListener('click', async () => {
     try {
       const r = await window.pywebview.api.open_file();
       if (!r) return;
-      loadText(r.text);
-      setStatus(`已打开：${r.path}（${editor.getItems().length} 条）`);
+      const info = await loadText(r.text);
+      setStatus(`已打开：${r.path}（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
     }
@@ -131,8 +132,8 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files?.[0];
   if (!f) return;
-  loadText(await f.text());
-  setStatus(`已加载文件：${f.name}（${editor.getItems().length} 条）`);
+  const r = await loadText(await f.text());
+  setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
 // 翻译
