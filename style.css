@@ -144,6 +144,81 @@ button.primary:hover {
   border-left-color: var(--active-border);
 }
 
+/* 查找命中：当前匹配所在行高亮（黄绿色块） */
+.line.match {
+  background: #fff1a8 !important;
+  box-shadow: inset 3px 0 0 #f5a623;
+}
+
+/* 查找 / 替换栏 */
+.findbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #fbfcfd;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.findbar[hidden] {
+  display: none;
+}
+
+.findbar input[type="text"] {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+#findQuery {
+  width: 200px;
+}
+
+#findReplace {
+  width: 160px;
+}
+
+.findbar label {
+  font-size: 12px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.find-info {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 56px;
+}
+
+.find-preview {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: #444;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 56px;
+  overflow: auto;
+}
+
+.find-preview mark {
+  background: #ffe08a;
+  color: #1f2329;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .badge {
   flex: 0 0 34px;
   display: flex;

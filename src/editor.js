@@ -127,5 +127,26 @@ export function createEditor(container, { onChange } = {}) {
     syncRowHeight(i);
   }
 
-  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render };
+  // 查找高亮：高亮第 i 行指定一侧，并清除上一次高亮
+  let matchEl = null;
+  function clearMatch() {
+    if (matchEl) {
+      matchEl.classList.remove('match');
+      matchEl = null;
+    }
+  }
+  function setMatch(i, side) {
+    clearMatch();
+    const pane = side === 'source' ? rowsSource : rowsTarget;
+    const row = pane.children[i];
+    if (!row) return;
+    const ta = row.querySelector('.line');
+    if (ta) {
+      ta.classList.add('match');
+      matchEl = ta;
+    }
+    setActive(i);
+  }
+
+  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch };
 }

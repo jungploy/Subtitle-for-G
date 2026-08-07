@@ -142,6 +142,221 @@ $('swapSides').addEventListener('click', () => {
   dirty = true;
   setStatus('已交换左右内容（原文 ↔ 译文）');
 });
+// --------------------------------------------------------------------------
+// 全文查找 / 替换
+// --------------------------------------------------------------------------
+const findBar = $('findBar');
+const findQuery = $('findQuery');
+const findReplace = $('findReplace');
+const findCase = $('findCase');
+const findWord = $('findWord');
+const findRegex = $('findRegex');
+const findInfo = $('findInfo');
+const findPreview = $('findPreview');
+
+const findState = { matches: [], idx: -1 };
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+  );
+}
+
+// 依据当前选项构造正则（global=true 用于全局匹配/替换）
+function makeRegex(q, global) {
+  const caseSensitive = findCase.checked;
+  const wholeWord = findWord.checked;
+  const asRegex = findRegex.checked;
+  let pattern = q;
+  let flags = global ? 'g' : '';
+  if (!asRegex) pattern = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (wholeWord && !asRegex) pattern = '\\b' + pattern + '\\b';
+  if (!caseSensitive) flags += 'i';
+  return new RegExp(pattern, flags);
+}
+
+// 扫描全部字幕（原文 + 译文），按文档顺序返回所有命中
+function buildMatches() {
+  const q = findQuery.value;
+  if (!q) return [];
+  let re;
+  try {
+    re = makeRegex(q, true);
+  } catch (e) {
+    setStatus('正则表达式无效：' + e.message);
+    return null;
+  }
+  const items = editor.getItems();
+  const matches = [];
+  const sides = ['source', 'target'];
+  items.forEach((it, i) => {
+    sides.forEach((side) => {
+      const text = it[side] || '';
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          re.lastIndex++;
+          continue;
+        }
+        matches.push({
+          itemIndex: i,
+          side,
+          start: m.index,
+          end: m.index + m[0].length,
+          text: m[0],
+        });
+      }
+    });
+  });
+  return matches;
+}
+
+function openFindBar() {
+  findBar.hidden = false;
+  findQuery.focus();
+  findQuery.select();
+  runSearch(true);
+}
+
+function closeFindBar() {
+  findBar.hidden = true;
+  editor.clearMatch();
+  findState.matches = [];
+  findState.idx = -1;
+  findInfo.textContent = '';
+  findPreview.innerHTML = '';
+}
+
+// 重新计算命中；resetIdx=true 时回到第一个
+function runSearch(resetIdx) {
+  const matches = buildMatches();
+  if (matches === null) return; // 正则错误已在 buildMatches 提示
+  findState.matches = matches;
+  if (resetIdx) findState.idx = matches.length ? 0 : -1;
+  else if (findState.idx >= matches.length) findState.idx = matches.length - 1;
+  updateFindUI();
+}
+
+function updateFindUI() {
+  editor.clearMatch();
+  const n = findState.matches.length;
+  if (n === 0) {
+    findInfo.textContent = findQuery.value ? '无匹配' : '';
+    findPreview.innerHTML = '';
+    if (findQuery.value) setStatus('没有匹配项');
+    return;
+  }
+  const m = findState.matches[findState.idx];
+  editor.setMatch(m.itemIndex, m.side);
+  findInfo.textContent = `${findState.idx + 1} / ${n}`;
+
+  const full = editor.getItems()[m.itemIndex][m.side] || '';
+  const before = full.slice(Math.max(0, m.start - 24), m.start);
+  const after = full.slice(m.end, m.end + 24);
+  const sideName = m.side === 'source' ? '原文' : '译文';
+  findPreview.innerHTML =
+    `第 ${m.itemIndex + 1} 行 · ${sideName}：…` +
+    escapeHtml(before) +
+    `<mark>${escapeHtml(m.text)}</mark>` +
+    escapeHtml(after) +
+    '…';
+  setStatus(`匹配 ${findState.idx + 1}/${n}（第 ${m.itemIndex + 1} 行 · ${sideName}）`);
+}
+
+function gotoMatch(delta) {
+  const n = findState.matches.length;
+  if (!n) return;
+  findState.idx = (findState.idx + delta + n) % n;
+  updateFindUI();
+}
+
+// 替换当前命中（逐处替换）
+function replaceCurrent() {
+  const n = findState.matches.length;
+  if (!n) {
+    setStatus('没有可替换的内容');
+    return;
+  }
+  const m = findState.matches[findState.idx];
+  const items = editor.getItems();
+  const it = items[m.itemIndex];
+  const text = it[m.side] || '';
+  const repl = findReplace.value;
+  it[m.side] = text.slice(0, m.start) + repl + text.slice(m.end);
+  dirty = true;
+  editor.setItems(items); // 刷新左右两栏
+  runSearch(false); // 重新扫描，idx 保持当前位置
+}
+
+// 全部替换（两边、所有命中）
+function replaceAll() {
+  const q = findQuery.value;
+  if (!q) return;
+  let re;
+  try {
+    re = makeRegex(q, true);
+  } catch (e) {
+    setStatus('正则表达式无效：' + e.message);
+    return;
+  }
+  const items = editor.getItems();
+  let count = 0;
+  const repl = findReplace.value;
+  items.forEach((it) => {
+    ['source', 'target'].forEach((side) => {
+      const text = it[side] || '';
+      if (!text) return;
+      it[side] = text.replace(re, () => {
+        count++;
+        return repl;
+      });
+    });
+  });
+  dirty = true;
+  editor.setItems(items);
+  editor.clearMatch();
+  findState.matches = [];
+  findState.idx = -1;
+  findInfo.textContent = '';
+  findPreview.innerHTML = '';
+  setStatus(`已替换 ${count} 处`);
+}
+
+$('findReplaceToggle').addEventListener('click', () =>
+  findBar.hidden ? openFindBar() : closeFindBar()
+);
+$('findClose').addEventListener('click', closeFindBar);
+findQuery.addEventListener('input', () => runSearch(true));
+[findCase, findWord, findRegex].forEach((cb) =>
+  cb.addEventListener('change', () => runSearch(true))
+);
+$('findNext').addEventListener('click', () => gotoMatch(1));
+$('findPrev').addEventListener('click', () => gotoMatch(-1));
+$('findReplaceOne').addEventListener('click', replaceCurrent);
+$('findReplaceAll').addEventListener('click', replaceAll);
+findReplace.addEventListener('keydown', (e) => onFindKeydown(e, 1));
+findQuery.addEventListener('keydown', (e) => onFindKeydown(e, 0));
+
+// 在查找栏内的键盘快捷键：Enter=下一个，Shift+Enter=上一个，Esc=关闭
+function onFindKeydown(e, isReplace) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    gotoMatch(e.shiftKey ? -1 : 1);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFindBar();
+  }
+}
+
+// 全局 Ctrl/Cmd+F 打开查找栏
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    findBar.hidden ? openFindBar() : findQuery.focus();
+  }
+});
+
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', async (e) => {
   e.preventDefault();

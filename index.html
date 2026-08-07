@@ -12,6 +12,7 @@
       <button id="loadSample">加载示例</button>
       <button id="openFile">打开</button>
       <button id="swapSides" title="把左列（原文）与右列（译文）内容互换">交换左右</button>
+      <button id="findReplaceToggle" title="全文查找 / 替换（Ctrl+F）">查找替换</button>
       <input type="file" id="fileInput" accept=".srt,.vtt,.txt" style="display:none" />
       <span style="flex: 1"></span>
       <label>翻译引擎
@@ -31,6 +32,23 @@
       <button id="exportTranslate">导出译文</button>
     </div>
     <div class="status" id="status">就绪</div>
+
+    <!-- 全文查找 / 替换栏 -->
+    <div class="findbar" id="findBar" hidden>
+      <input type="text" id="findQuery" placeholder="查找…" />
+      <input type="text" id="findReplace" placeholder="替换为（可空）" />
+      <label title="区分大小写"><input type="checkbox" id="findCase" /> 区分大小写</label>
+      <label title="全词匹配"><input type="checkbox" id="findWord" /> 全词</label>
+      <label title="按正则表达式匹配"><input type="checkbox" id="findRegex" /> 正则</label>
+      <button id="findPrev" title="上一个 (Shift+Enter)">↑</button>
+      <button id="findNext" title="下一个 (Enter)">↓</button>
+      <button id="findReplaceOne">替换</button>
+      <button id="findReplaceAll" class="primary">全部替换</button>
+      <span class="find-info" id="findInfo"></span>
+      <button id="findClose" title="关闭 (Esc)">✕</button>
+      <div class="find-preview" id="findPreview"></div>
+    </div>
+
     <div id="editorMount"></div>
 
     <script type="module" src="src/app.js"></script>
