@@ -35,9 +35,9 @@ const server = http.createServer(async (req, res) => {
       res.end('bad json');
       return;
     }
-    const { lines, provider, apiKey, model } = payload;
+    const { lines, provider, apiKey, model, source = 'en', target = 'zh-CN' } = payload;
     try {
-      const translations = await translate(lines, { provider, apiKey, model });
+      const translations = await translate(lines, { provider, apiKey, model, source, target });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ translations }));
     } catch (e) {
@@ -51,7 +51,7 @@ const server = http.createServer(async (req, res) => {
   res.end('not found');
 });
 
-async function translate(lines, { provider, apiKey, model }) {
+async function translate(lines, { provider, apiKey, model, source = 'en', target = 'zh-CN' }) {
   if (provider === 'openai' || provider === 'openai-compatible') {
     const base = process.env.OPENAI_BASE || 'https://api.openai.com/v1';
     const key = apiKey || process.env.OPENAI_API_KEY || '';
@@ -91,6 +91,30 @@ async function translate(lines, { provider, apiKey, model }) {
     if (!resp.ok) throw new Error(`deepl ${resp.status}`);
     const data = await resp.json();
     return data.translations.map((t) => t.text);
+  }
+
+  if (provider === 'mymemory') {
+    // 免费、无需 key 的公开翻译 API（匿名 5000 词/天，附 email 可到 10000）。
+    const langpair = `${source}|${target}`;
+    const out = [];
+    for (const line of lines) {
+      const q = (line || '').trim();
+      if (!q) {
+        out.push('');
+        continue;
+      }
+      const url =
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(q)}` +
+        `&langpair=${encodeURIComponent(langpair)}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`mymemory ${resp.status}`);
+      const data = await resp.json();
+      if (data.responseStatus && data.responseStatus !== 200) {
+        throw new Error(`mymemory: ${data.responseDetails || data.responseStatus}`);
+      }
+      out.push(data.responseData?.translatedText || '');
+    }
+    return out;
   }
 
   throw new Error('unknown provider: ' + provider);

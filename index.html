@@ -14,13 +14,14 @@
       <span style="flex: 1"></span>
       <label>翻译引擎
         <select id="provider">
+          <option value="mymemory" selected>免费 MyMemory（无需 Key）</option>
           <option value="manual">手动</option>
           <option value="mock">演示(mock)</option>
           <option value="openai">OpenAI</option>
           <option value="deepl">DeepL</option>
         </select>
       </label>
-      <label>API Key <input type="text" id="apiKey" placeholder="粘贴你的 key" /></label>
+      <label>API Key <input type="text" id="apiKey" placeholder="MyMemory 可留空" /></label>
       <label>模型 <input type="text" id="model" placeholder="如 gpt-4o-mini" /></label>
       <button id="translateSelected">翻译选中行</button>
       <button id="translateAll" class="primary">翻译全部</button>

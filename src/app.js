@@ -71,6 +71,10 @@ async function doTranslate(scope) {
     return;
   }
 
+  if ((provider === 'openai' || provider === 'deepl') && !apiKey) {
+    setStatus('未填写 API Key，将尝试使用代理端环境变量 OPENAI_API_KEY / DEEPL_API_KEY；若失败请在上方填入 key');
+  }
+
   try {
     if (scope === 'selected') {
       const ai = editor.getActiveIndex();
