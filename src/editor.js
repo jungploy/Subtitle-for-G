@@ -246,5 +246,21 @@ export function createEditor(container, { onChange } = {}) {
   }
   setupResizers();
 
-  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch };
+  // 原地交换每一行的 原文/译文：直接对调底层数据与文本框值，不销毁重建 DOM，
+  // 避免在某些 WebView 环境下「数据已换但视图未刷新」的不同步问题。
+  function swapSides() {
+    items.forEach((it, i) => {
+      const t = it.source;
+      it.source = it.target;
+      it.target = t;
+      const tr = tbody.children[i];
+      if (!tr) return;
+      const sTa = tr.querySelector('.source-line');
+      const tTa = tr.querySelector('.target-line');
+      if (sTa) sTa.value = it.source;
+      if (tTa) tTa.value = it.target;
+    });
+  }
+
+  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides };
 }

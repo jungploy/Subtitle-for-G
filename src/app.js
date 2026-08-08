@@ -126,19 +126,14 @@ $('exportBilingual').addEventListener('click', () =>
   doExport('bilingual', 'subtitle_bilingual.srt', '已导出双语 SRT')
 );
 
-// 交换左右：把每一条的原文(source)与译文(target)互换后重渲染
+// 交换左右：把每一条的原文(source)与译文(target)原地互换（不重建 DOM，视图必刷新）
 $('swapSides').addEventListener('click', () => {
   const items = editor.getItems();
   if (!items.length) {
     setStatus('没有可交换的内容');
     return;
   }
-  items.forEach((it) => {
-    const t = it.source;
-    it.source = it.target;
-    it.target = t;
-  });
-  editor.setItems(items);
+  editor.swapSides();
   dirty = true;
   setStatus('已交换左右内容（原文 ↔ 译文）');
 });
