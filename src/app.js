@@ -3,6 +3,7 @@ import { parseSRT } from './srt.js';
 import { createEditor } from './editor.js';
 import { translateLines } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
+import { plainText } from './rich.js';
 
 const editor = createEditor(document.getElementById('editorMount'), {
   onChange: () => {
@@ -268,7 +269,7 @@ function buildMatches() {
   const sides = ['source', 'target'];
   items.forEach((it, i) => {
     sides.forEach((side) => {
-      const text = it[side] || '';
+      const text = plainText(it[side] || '');
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(text)) !== null) {
@@ -328,7 +329,7 @@ function updateFindUI() {
   editor.setMatch(m.itemIndex, m.side);
   findInfo.textContent = `${findState.idx + 1} / ${n}`;
 
-  const full = editor.getItems()[m.itemIndex][m.side] || '';
+  const full = plainText(editor.getItems()[m.itemIndex][m.side] || '');
   const before = full.slice(Math.max(0, m.start - 24), m.start);
   const after = full.slice(m.end, m.end + 24);
   const sideName = m.side === 'source' ? '原文' : '译文';
@@ -358,7 +359,7 @@ function replaceCurrent() {
   const m = findState.matches[findState.idx];
   const items = editor.getItems();
   const it = items[m.itemIndex];
-  const text = it[m.side] || '';
+  const text = plainText(it[m.side] || '');
   const repl = findReplace.value;
   it[m.side] = text.slice(0, m.start) + repl + text.slice(m.end);
   dirty = true;
@@ -382,7 +383,7 @@ function replaceAll() {
   const repl = findReplace.value;
   items.forEach((it) => {
     ['source', 'target'].forEach((side) => {
-      const text = it[side] || '';
+      const text = plainText(it[side] || '');
       if (!text) return;
       it[side] = text.replace(re, () => {
         count++;
@@ -473,14 +474,14 @@ async function doTranslate(scope) {
         return;
       }
       setStatus(`正在翻译第 ${ai + 1} 行…`);
-      const [t] = await translateLines([items[ai].source], { provider, apiKey, model }, setStatus);
+      const [t] = await translateLines([plainText(items[ai].source)], { provider, apiKey, model }, setStatus);
       items[ai].target = t;
       editor.applyTargets();
       setStatus(`已翻译第 ${ai + 1} 行`);
     } else {
       setStatus(`正在翻译全部 ${items.length} 条…`);
       const translations = await translateLines(
-        items.map((it) => it.source),
+        items.map((it) => plainText(it.source)),
         { provider, apiKey, model },
         setStatus
       );

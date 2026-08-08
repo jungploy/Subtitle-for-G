@@ -386,14 +386,14 @@ thead th.resizing .col-resizer {
   color: var(--muted);
 }
 
-/* 可编辑的原文/译文文本框 */
-.sub-table textarea {
+/* 原文/译文富文本单元格（标记已隐藏，字体样式生效） */
+.sub-table .source-line,
+.sub-table .target-line {
   display: block;
   width: 100%;
   min-height: 26px;
   border: none;
   outline: none;
-  resize: none;
   background: transparent;
   font: inherit;
   font-size: 14px;
@@ -401,18 +401,33 @@ thead th.resizing .col-resizer {
   padding: 0;
   margin: 0;
   color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   overflow: hidden;
 }
 
-.sub-table textarea::placeholder {
+.sub-table .source-line {
+  color: var(--muted);
+  cursor: default;
+}
+
+.sub-table .target-line {
+  cursor: text;
+}
+
+/* 译文单元格为空时显示占位提示 */
+.sub-table .target-line:empty::before {
+  content: attr(data-placeholder);
   color: #c2c7cf;
 }
 
-.sub-table textarea:focus {
+.sub-table .target-line:focus {
   background: #fffdf5;
 }
 
-.sub-table textarea.match {
+.sub-table .source-line.match,
+.sub-table .target-line.match {
   background: #fff1a8 !important;
   box-shadow: inset 3px 0 0 #f5a623;
 }

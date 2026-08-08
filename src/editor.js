@@ -1,6 +1,9 @@
 // src/editor.js
 // 表格方式的双语字幕编辑器：序号 / 起始时码 / 结束时码 / 时长 / 原文 / 译文
 // 每行同一 <tr>，天然等高；原文/译文文本框自动撑高。
+// 原文/译文单元格为富文本：保留字幕里的字体标记（大小/颜色/粗体/斜体），不显示标签本身。
+
+import { renderRich } from './rich.js';
 
 export function createEditor(container, { onChange } = {}) {
   container.innerHTML = `
@@ -63,25 +66,30 @@ export function createEditor(container, { onChange } = {}) {
     return msToTime(Math.max(0, d));
   }
 
-  function makeCell(cls, content, editable = false) {
+  function makeCell(cls, content) {
     const td = document.createElement('td');
     td.className = cls;
-    if (editable) {
-      const ta = document.createElement('textarea');
-      ta.className = cls.replace('cell-', '') + '-line';
-      ta.value = content || '';
-      ta.spellcheck = false;
-      ta.rows = 1;
-      td.appendChild(ta);
-      return { td, ta };
-    }
     if (content !== undefined && content !== null) td.textContent = content;
     return { td };
   }
 
-  function autoGrow(ta) {
-    ta.style.height = 'auto';
-    ta.style.height = ta.scrollHeight + 'px';
+  // 富文本单元格：用 div 承载 renderRich 结果（标记隐藏、字体样式生效）。
+  // source 只读展示；target 可编辑，编辑时取 innerText（保留换行）写回模型。
+  function makeRichCell(cls, raw, editable = false) {
+    const td = document.createElement('td');
+    td.className = cls;
+    const div = document.createElement('div');
+    div.className = cls.replace('cell-', '') + '-line';
+    div.innerHTML = renderRich(raw);
+    div.contentEditable = editable ? 'true' : 'false';
+    if (editable) div.spellcheck = false;
+    td.appendChild(div);
+    return { td, div };
+  }
+
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
   }
 
   function makeRow(i, it) {
@@ -94,39 +102,30 @@ export function createEditor(container, { onChange } = {}) {
     const endTd = makeCell('cell-end', it.end || '');
     const durTd = makeCell('cell-duration', duration(it.start, it.end));
 
-    const sourceCell = makeCell('cell-source', it.source, true);
-    const targetCell = makeCell('cell-target', it.target, true);
+    const sourceCell = makeRichCell('cell-source', it.source, false);
+    const targetCell = makeRichCell('cell-target', it.target, true);
 
     [idxTd, startTd, endTd, durTd, sourceCell, targetCell].forEach((c) =>
       tr.appendChild(c.td || c)
     );
 
-    const sourceTa = sourceCell.ta;
-    const targetTa = targetCell.ta;
-    sourceTa.placeholder = '';
-    targetTa.placeholder = '在此输入翻译…';
+    const sourceEl = sourceCell.div;
+    const targetEl = targetCell.div;
+    targetEl.dataset.placeholder = '在此输入翻译…';
 
-    sourceTa.addEventListener('input', () => {
-      items[i].source = sourceTa.value;
-      autoGrow(sourceTa);
-      onChange && onChange(items);
-    });
-    targetTa.addEventListener('input', () => {
-      items[i].target = targetTa.value;
-      autoGrow(targetTa);
+    targetEl.addEventListener('input', () => {
+      items[i].target = targetEl.innerText;
+      autoGrow(targetEl);
       onChange && onChange(items);
     });
 
-    tr.addEventListener('click', (e) => {
-      if (e.target !== sourceTa && e.target !== targetTa) setActive(i);
-    });
-    sourceTa.addEventListener('focus', () => setActive(i));
-    targetTa.addEventListener('focus', () => setActive(i));
+    tr.addEventListener('click', () => setActive(i));
+    targetEl.addEventListener('focus', () => setActive(i));
 
-    // 首渲染后让文本框自适应高度
+    // 首渲染后让单元格自适应高度
     requestAnimationFrame(() => {
-      autoGrow(sourceTa);
-      autoGrow(targetTa);
+      autoGrow(sourceEl);
+      autoGrow(targetEl);
     });
 
     return tr;
@@ -174,10 +173,10 @@ export function createEditor(container, { onChange } = {}) {
     items.forEach((it, i) => {
       const tr = tbody.children[i];
       if (!tr) return;
-      const ta = tr.querySelector('.target-line');
-      if (ta) {
-        ta.value = it.target || '';
-        autoGrow(ta);
+      const el = tr.querySelector('.target-line');
+      if (el) {
+        el.innerHTML = renderRich(it.target || '');
+        autoGrow(el);
       }
     });
   }
@@ -188,10 +187,10 @@ export function createEditor(container, { onChange } = {}) {
     items[i].source = val;
     const tr = tbody.children[i];
     if (!tr) return;
-    const ta = tr.querySelector('.source-line');
-    if (ta) {
-      ta.value = val;
-      autoGrow(ta);
+    const el = tr.querySelector('.source-line');
+    if (el) {
+      el.innerHTML = renderRich(val);
+      autoGrow(el);
     }
   }
 
@@ -255,10 +254,16 @@ export function createEditor(container, { onChange } = {}) {
       it.target = t;
       const tr = tbody.children[i];
       if (!tr) return;
-      const sTa = tr.querySelector('.source-line');
-      const tTa = tr.querySelector('.target-line');
-      if (sTa) sTa.value = it.source;
-      if (tTa) tTa.value = it.target;
+      const sEl = tr.querySelector('.source-line');
+      const tEl = tr.querySelector('.target-line');
+      if (sEl) {
+        sEl.innerHTML = renderRich(it.source);
+        autoGrow(sEl);
+      }
+      if (tEl) {
+        tEl.innerHTML = renderRich(it.target);
+        autoGrow(tEl);
+      }
     });
   }
 
