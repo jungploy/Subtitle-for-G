@@ -1,5 +1,5 @@
 // src/app.js
-import { parseSRT, serializeSRT } from './srt.js';
+import { parseSRT } from './srt.js';
 import { createEditor } from './editor.js';
 import { translateLines } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
@@ -103,43 +103,6 @@ function download(filename, text) {
   a.click();
   URL.revokeObjectURL(url);
 }
-
-// 导出：Tauri/pywebview 用原生「另存为」对话框 + 本地写入；浏览器用 Blob 下载
-async function doExport(mode, defaultName, okMsg) {
-  const text = serializeSRT(editor.getItems(), { mode });
-  if (isTauri()) {
-    try {
-      const path = await window.__TAURI__.dialog.save({
-        defaultPath: defaultName,
-        filters: [{ name: 'SubRip 字幕', extensions: ['srt'] }],
-      });
-      if (!path) return;
-      await window.__TAURI__.core.invoke('write_file', { path, contents: text });
-      setStatus(`已保存到：${path}`);
-    } catch (e) {
-      setStatus('保存失败：' + (e?.message || e));
-    }
-  } else if (isPyWebView()) {
-    try {
-      const path = await window.pywebview.api.save_as(defaultName, text);
-      if (!path) return;
-      setStatus(`已保存到：${path}`);
-    } catch (e) {
-      setStatus('保存失败：' + (e?.message || e));
-    }
-  } else {
-    download(defaultName, text);
-    setStatus(okMsg);
-  }
-}
-
-$('exportTranslate').addEventListener('click', () =>
-  doExport('translate', 'subtitle_translated.srt', '已导出翻译版 SRT')
-);
-
-$('exportBilingual').addEventListener('click', () =>
-  doExport('bilingual', 'subtitle_bilingual.srt', '已导出双语 SRT')
-);
 
 // --------------------------------------------------------------------------
 // 项目文件（.gsub / XML）：打开项目、保存项目

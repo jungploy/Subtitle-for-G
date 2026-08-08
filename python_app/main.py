@@ -32,7 +32,7 @@ PORT = 8011
 # 优先放在 exe 同级目录，若不可写则回退到 %APPDATA%/SubtitleForG
 # --------------------------------------------------------------------------
 DEFAULT_CONFIG = {
-    'window': {'width': 1100, 'height': 720, 'maximized': False},
+    'window': {'width': 1100, 'height': 720, 'x': None, 'y': None, 'maximized': False},
     'table': {'cell_padding': 4},
     'last_dir': '',
     'provider': 'mymemory',
@@ -318,48 +318,76 @@ if __name__ == '__main__':
     cfg = _load_config()
     win_w = cfg['window'].get('width') or 1100
     win_h = cfg['window'].get('height') or 720
+    win_x = cfg['window'].get('x')
+    win_y = cfg['window'].get('y')
+
+    create_kwargs = {
+        'js_api': api,
+        'width': win_w,
+        'height': win_h,
+    }
+    # 仅当同时记录了有效的 x、y 时才还原窗口位置（否则由系统居中放置）
+    if isinstance(win_x, (int, float)) and isinstance(win_y, (int, float)):
+        create_kwargs['x'] = int(win_x)
+        create_kwargs['y'] = int(win_y)
 
     window = webview.create_window(
         'Subtitle-for-G - 字幕双语编辑器',
         f'http://127.0.0.1:{PORT}',
-        js_api=api,
-        width=win_w,
-        height=win_h,
+        **create_kwargs,
     )
 
-    # 窗口尺寸/最大化状态持久化
+    # 窗口位置/尺寸/最大化状态持久化
+    _maximized = {'v': bool(cfg['window'].get('maximized'))}
     _resize_timer = None
 
-    def _persist_size():
+    def _persist_geometry():
         c = _load_config()
-        c['window']['width'] = window.width
-        c['window']['height'] = window.height
+        # 最大化时只保留 maximized 标记，不覆盖记录的常规位置/大小，
+        # 这样下次启动还原到最大化窗口、但不把记录尺寸撑成整屏。
+        if not _maximized['v']:
+            try:
+                c['window']['x'] = int(window.x)
+                c['window']['y'] = int(window.y)
+                c['window']['width'] = int(window.width)
+                c['window']['height'] = int(window.height)
+            except Exception:
+                pass
         _save_config(c)
 
     def _on_resized():
         global _resize_timer
         if _resize_timer:
             _resize_timer.cancel()
-        _resize_timer = threading.Timer(0.4, _persist_size)
+        _resize_timer = threading.Timer(0.4, _persist_geometry)
         _resize_timer.start()
 
+    def _on_moved():
+        _persist_geometry()
+
     def _on_closing():
-        _persist_size()
+        _persist_geometry()
         return True
 
     def _on_maximized():
+        _maximized['v'] = True
         c = _load_config()
         c['window']['maximized'] = True
         _save_config(c)
 
     def _on_restored():
+        _maximized['v'] = False
         c = _load_config()
         c['window']['maximized'] = False
         _save_config(c)
 
     window.events.resized += _on_resized
     window.events.closing += _on_closing
-    # 这两个事件在部分 pywebview 后端可能不存在，逐一定制订阅以保兼容
+    # 这些事件在部分 pywebview 后端可能不存在，逐一定制订阅以保兼容
+    try:
+        window.events.moved += _on_moved
+    except Exception:
+        pass
     try:
         window.events.maximized += _on_maximized
     except Exception:
