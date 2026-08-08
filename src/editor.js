@@ -1,159 +1,159 @@
 // src/editor.js
-// 双语逐行编辑器：左侧时间码面板 + 左原文 / 右译文 两栏按行索引对齐，
-// 选中联动高亮 + 滚动对齐，原文/翻译均可编辑。
+// 表格方式的双语字幕编辑器：序号 / 起始时码 / 结束时码 / 时长 / 原文 / 译文
+// 每行同一 <tr>，天然等高；原文/译文文本框自动撑高。
 
 export function createEditor(container, { onChange } = {}) {
   container.innerHTML = `
     <div class="editor">
-      <div class="pane timeline">
-        <div class="pane-title">序号 · 时间码</div>
-        <div class="rows" id="rowsTime"></div>
-      </div>
-      <div class="pane">
-        <div class="pane-title">原文 · Source</div>
-        <div class="rows" id="rowsSource"></div>
-      </div>
-      <div class="pane">
-        <div class="pane-title">翻译 · Target</div>
-        <div class="rows" id="rowsTarget"></div>
+      <div class="table-wrap">
+        <table class="sub-table" id="subTable">
+          <colgroup>
+            <col class="col-index" />
+            <col class="col-start" />
+            <col class="col-end" />
+            <col class="col-duration" />
+            <col class="col-source" />
+            <col class="col-target" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>起始时码</th>
+              <th>结束时码</th>
+              <th>时长</th>
+              <th>原文</th>
+              <th>译文</th>
+            </tr>
+          </thead>
+          <tbody id="rowsBody"></tbody>
+        </table>
       </div>
     </div>`;
 
-  const rowsTime = container.querySelector('#rowsTime');
-  const rowsSource = container.querySelector('#rowsSource');
-  const rowsTarget = container.querySelector('#rowsTarget');
+  const tbody = container.querySelector('#rowsBody');
+  const table = container.querySelector('#subTable');
   let items = [];
   let activeIndex = -1;
-  let scrollLock = false;
+  let matchEl = null;
 
-  function makeRow(i, value, cls, placeholder) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.dataset.index = i;
-
-    const ta = document.createElement('textarea');
-    ta.className = 'line ' + cls;
-    ta.value = value;
-    ta.placeholder = placeholder || '';
-    ta.spellcheck = false;
-
-    const field = cls === 'source-line' ? 'source' : 'target';
-
-    ta.addEventListener('input', () => {
-      items[i][field] = ta.value;
-      syncRowHeight(i);
-      onChange && onChange(items);
-    });
-    ta.addEventListener('focus', () => setActive(i));
-    ta.addEventListener('click', () => setActive(i));
-
-    row.appendChild(ta);
-    return row;
+  // SRT 时间码 -> 毫秒
+  function timeToMs(t) {
+    const m = String(t).match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
+    if (!m) return 0;
+    const hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    const ss = parseInt(m[3], 10);
+    const ms = parseInt(m[4].padEnd(3, '0'), 10);
+    return ((hh * 60 + mm) * 60 + ss) * 1000 + ms;
   }
 
-  // 左侧时间码面板的一行：序号 / 起始 / 结束
-  function makeTimeRow(i, it) {
-    const row = document.createElement('div');
-    row.className = 'time-row';
-    row.dataset.index = i;
+  // 毫秒 -> SRT 时间码
+  function msToTime(ms) {
+    const total = Math.max(0, Math.floor(ms));
+    const h = Math.floor(total / 3600000);
+    const m = Math.floor((total % 3600000) / 60000);
+    const s = Math.floor((total % 60000) / 1000);
+    const mills = total % 1000;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(mills).padStart(3, '0')}`;
+  }
 
-    const idx = document.createElement('div');
-    idx.className = 'tc-index';
-    idx.textContent = '#' + (it.index ?? i + 1);
+  function duration(start, end) {
+    const d = timeToMs(end) - timeToMs(start);
+    return msToTime(Math.max(0, d));
+  }
 
-    const start = document.createElement('div');
-    start.className = 'tc-start';
-    start.textContent = it.start || '';
+  function makeCell(cls, content, editable = false) {
+    const td = document.createElement('td');
+    td.className = cls;
+    if (editable) {
+      const ta = document.createElement('textarea');
+      ta.className = cls.replace('cell-', '') + '-line';
+      ta.value = content || '';
+      ta.spellcheck = false;
+      ta.rows = 1;
+      td.appendChild(ta);
+      return { td, ta };
+    }
+    if (content !== undefined && content !== null) td.textContent = content;
+    return { td };
+  }
 
-    const end = document.createElement('div');
-    end.className = 'tc-end';
-    end.textContent = it.end || '';
+  function autoGrow(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
 
-    row.appendChild(idx);
-    row.appendChild(start);
-    row.appendChild(end);
-    row.addEventListener('click', () => setActive(i));
-    return row;
+  function makeRow(i, it) {
+    const tr = document.createElement('tr');
+    tr.className = 'sub-row';
+    tr.dataset.index = i;
+
+    const idxTd = makeCell('cell-index', it.index ?? i + 1);
+    const startTd = makeCell('cell-start', it.start || '');
+    const endTd = makeCell('cell-end', it.end || '');
+    const durTd = makeCell('cell-duration', duration(it.start, it.end));
+
+    const sourceCell = makeCell('cell-source', it.source, true);
+    const targetCell = makeCell('cell-target', it.target, true);
+
+    [idxTd, startTd, endTd, durTd, sourceCell, targetCell].forEach((c) =>
+      tr.appendChild(c.td || c)
+    );
+
+    const sourceTa = sourceCell.ta;
+    const targetTa = targetCell.ta;
+    sourceTa.placeholder = '';
+    targetTa.placeholder = '在此输入翻译…';
+
+    sourceTa.addEventListener('input', () => {
+      items[i].source = sourceTa.value;
+      autoGrow(sourceTa);
+      onChange && onChange(items);
+    });
+    targetTa.addEventListener('input', () => {
+      items[i].target = targetTa.value;
+      autoGrow(targetTa);
+      onChange && onChange(items);
+    });
+
+    tr.addEventListener('click', (e) => {
+      if (e.target !== sourceTa && e.target !== targetTa) setActive(i);
+    });
+    sourceTa.addEventListener('focus', () => setActive(i));
+    targetTa.addEventListener('focus', () => setActive(i));
+
+    // 首渲染后让文本框自适应高度
+    requestAnimationFrame(() => {
+      autoGrow(sourceTa);
+      autoGrow(targetTa);
+    });
+
+    return tr;
   }
 
   function render() {
-    rowsTime.innerHTML = '';
-    rowsSource.innerHTML = '';
-    rowsTarget.innerHTML = '';
-    items.forEach((it, i) => {
-      rowsTime.appendChild(makeTimeRow(i, it));
-      rowsSource.appendChild(makeRow(i, it.source, 'source-line', ''));
-      rowsTarget.appendChild(makeRow(i, it.target, 'target-line', '在此输入翻译…'));
-    });
-    syncAllHeights();
+    tbody.innerHTML = '';
+    items.forEach((it, i) => tbody.appendChild(makeRow(i, it)));
     if (activeIndex >= 0) highlight(activeIndex);
   }
 
-  // 让三栏同一行高度一致：取「原文文本框 / 译文文本框 / 时间码行」三者自然高度的最大值，
-  // 保证逐行严格对齐。注意时间码行本身含 3 行文字、且带 1px 下边框，必须纳入计算，
-  // 否则会被压低导致内容溢出、与右两栏不在同一水平线上。
-  function syncRowHeight(i) {
-    const s = rowsSource.children[i]?.querySelector('.line');
-    const t = rowsTarget.children[i]?.querySelector('.line');
-    const timeRow = rowsTime.children[i];
-    if (!s || !t) return;
-    // 先还原为 auto，才能测得真实自然高度
-    s.style.height = 'auto';
-    t.style.height = 'auto';
-    if (timeRow) timeRow.style.height = 'auto';
-    const hs = s.scrollHeight;
-    const ht = t.scrollHeight;
-    const htrow = timeRow ? timeRow.scrollHeight + 1 : 0; // +1 补偿时间行 1px 下边框
-    const h = Math.max(hs, ht, htrow, 28);
-    s.style.height = h + 'px';
-    t.style.height = h + 'px';
-    if (timeRow) timeRow.style.height = h + 'px';
-  }
-  function syncAllHeights() {
-    for (let i = 0; i < items.length; i++) syncRowHeight(i);
-  }
-
   function highlight(i) {
-    [rowsTime, rowsSource, rowsTarget].forEach((pane) =>
-      pane.querySelectorAll('.row, .time-row').forEach((r) =>
-        r.classList.toggle('active', +r.dataset.index === i)
-      )
-    );
-  }
-
-  // 让某一侧滚动，使第 i 行居中
-  function scrollPaneToRow(pane, i) {
-    const el = pane.children[i];
-    if (!el) return;
-    pane.scrollTop = el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2;
-  }
-
-  // 三栏滚动联动：任一栏滚动，其余同步
-  function syncScroll(srcPane) {
-    if (scrollLock) return;
-    scrollLock = true;
-    const top = srcPane.scrollTop;
-    [rowsTime, rowsSource, rowsTarget].forEach((p) => {
-      if (p !== srcPane) p.scrollTop = top;
+    tbody.querySelectorAll('tr').forEach((tr) => {
+      tr.classList.toggle('active', +tr.dataset.index === i);
     });
-    scrollLock = false;
   }
-  [rowsTime, rowsSource, rowsTarget].forEach((p) =>
-    p.addEventListener('scroll', () => syncScroll(p))
-  );
 
-  // 窗口缩放 / 字体晚加载时重新对齐三栏行高，防止对齐漂移
-  window.addEventListener('resize', syncAllHeights);
-  // 延迟一帧再算一次，规避首帧字体/布局未稳定导致的测高偏差
-  requestAnimationFrame(syncAllHeights);
+  function scrollToRow(i) {
+    const tr = tbody.children[i];
+    if (!tr) return;
+    const wrap = table.parentElement;
+    wrap.scrollTop = tr.offsetTop - wrap.clientHeight / 2 + tr.offsetHeight / 2;
+  }
 
-  // 选中第 i 行：三栏高亮，且都滚动到该行居中 —— 清晰对应
   function setActive(i) {
     activeIndex = i;
     highlight(i);
-    scrollPaneToRow(rowsTime, i);
-    scrollPaneToRow(rowsSource, i);
-    scrollPaneToRow(rowsTarget, i);
+    scrollToRow(i);
   }
 
   function setItems(newItems) {
@@ -167,50 +167,47 @@ export function createEditor(container, { onChange } = {}) {
   function getActiveIndex() {
     return activeIndex;
   }
-  // 翻译回填后，把 target 写回文本框并重新对齐高度
+
+  // 翻译回填后刷新目标列
   function applyTargets() {
     items.forEach((it, i) => {
-      const ta = rowsTarget.children[i]?.querySelector('.line');
-      if (ta) ta.value = it.target || '';
+      const tr = tbody.children[i];
+      if (!tr) return;
+      const ta = tr.querySelector('.target-line');
+      if (ta) {
+        ta.value = it.target || '';
+        autoGrow(ta);
+      }
     });
-    syncAllHeights();
   }
+
+  // 用于查找替换的批量 setSource
   function setSource(i, val) {
     if (!items[i]) return;
     items[i].source = val;
-    const ta = rowsSource.children[i]?.querySelector('.line');
-    if (ta) ta.value = val;
-    syncRowHeight(i);
+    const tr = tbody.children[i];
+    if (!tr) return;
+    const ta = tr.querySelector('.source-line');
+    if (ta) {
+      ta.value = val;
+      autoGrow(ta);
+    }
   }
 
-  // 查找高亮：高亮第 i 行指定一侧，并清除上一次高亮
-  let matchEl = null;
-  let matchTimeEl = null;
   function clearMatch() {
     if (matchEl) {
       matchEl.classList.remove('match');
       matchEl = null;
     }
-    if (matchTimeEl) {
-      matchTimeEl.classList.remove('match');
-      matchTimeEl = null;
-    }
   }
   function setMatch(i, side) {
     clearMatch();
-    const pane = side === 'source' ? rowsSource : rowsTarget;
-    const row = pane.children[i];
-    if (row) {
-      const ta = row.querySelector('.line');
-      if (ta) {
-        ta.classList.add('match');
-        matchEl = ta;
-      }
-    }
-    const trow = rowsTime.children[i];
-    if (trow) {
-      trow.classList.add('match');
-      matchTimeEl = trow;
+    const tr = tbody.children[i];
+    if (!tr) return;
+    const ta = tr.querySelector(side === 'source' ? '.source-line' : '.target-line');
+    if (ta) {
+      ta.classList.add('match');
+      matchEl = ta;
     }
     setActive(i);
   }
