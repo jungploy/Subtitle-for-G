@@ -87,7 +87,7 @@ export function parseSRT(text, opts = {}) {
   }
 
   const total = raw.length;
-  // 双语探测：超过一半的字幕块「第一行与第二行分属不同文字体系」即判定为双语。
+  // 双语探测：超过一半的字幕块「第一行与第二行分属不同文字体系」即判定为双语（用于状态展示）。
   // 采用跨语种信号而非单纯行数，可避免普通单语 SRT 因换行折行被误拆。
   const cross = raw.filter(
     (r) => r.content.length >= 2 && isCrossScript(r.content[0], r.content[1])
@@ -96,8 +96,13 @@ export function parseSRT(text, opts = {}) {
     opts.bilingual === true ? true : opts.bilingual === false ? false : total > 0 && cross / total >= 0.5;
 
   const items = raw.map((r) => {
+    // 逐块判断是否为双语：该块首两行分属不同文字体系（或被强制双语）才拆分。
+    // 防止「同一语种被硬换行折成两行」的字幕（如整段中文的片尾署名）被误拆成原文/译文。
+    const blockIsBilingual =
+      opts.bilingual === true ||
+      (r.content.length >= 2 && isCrossScript(r.content[0], r.content[1]));
     let source, target;
-    if (detected) {
+    if (blockIsBilingual) {
       source = r.content[0] ?? '';
       target = r.content.slice(1).join('\n');
     } else {
