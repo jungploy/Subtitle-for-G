@@ -413,7 +413,57 @@ async function doTranslate(scope) {
 $('translateAll').addEventListener('click', () => doTranslate('all'));
 $('translateSelected').addEventListener('click', () => doTranslate('selected'));
 
+// --------------------------------------------------------------------------
+// 程序配置：窗口大小 / 表格间距 / 文件打开位置 / 翻译引擎 由 Python 端读写 config.json
+// --------------------------------------------------------------------------
+let cellPad = 4;
+
+function applyCellPadding(pad) {
+  cellPad = Math.max(0, Math.min(20, pad | 0));
+  document.documentElement.style.setProperty('--cell-pad', cellPad + 'px');
+  const pv = $('padVal');
+  if (pv) pv.textContent = String(cellPad);
+}
+
+function saveConfig(patch) {
+  if (!isPyWebView()) return;
+  try {
+    window.pywebview.api.save_config(patch);
+  } catch (e) {
+    /* 忽略保存失败 */
+  }
+}
+
+async function loadConfig() {
+  if (!isPyWebView()) return; // 浏览器回退不读取配置
+  try {
+    const cfg = await window.pywebview.api.get_config();
+    if (cfg?.provider) $('provider').value = cfg.provider;
+    if (typeof cfg?.table?.cell_padding === 'number') {
+      applyCellPadding(cfg.table.cell_padding);
+    }
+  } catch (e) {
+    /* 忽略：使用默认值 */
+  }
+}
+
+// 表格间距 +/− 调节
+$('padMinus').addEventListener('click', () => {
+  applyCellPadding(cellPad - 1);
+  saveConfig({ table: { cell_padding: cellPad } });
+});
+$('padPlus').addEventListener('click', () => {
+  applyCellPadding(cellPad + 1);
+  saveConfig({ table: { cell_padding: cellPad } });
+});
+
+// 翻译引擎变更时记录
+$('provider').addEventListener('change', () => {
+  saveConfig({ provider: $('provider').value });
+});
+
 // 首次自动加载示例，便于立即预览
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadConfig();
   $('loadSample').click();
 });

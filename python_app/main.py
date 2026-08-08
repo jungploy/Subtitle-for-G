@@ -12,6 +12,7 @@
 import os
 import sys
 import json
+import copy
 import threading
 import urllib.parse
 import urllib.request
@@ -25,6 +26,60 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = sys._MEIPASS if getattr(sys, 'frozen', False) else HERE
 DIST = os.path.join(BASE, 'dist')
 PORT = 8011
+
+# --------------------------------------------------------------------------
+# 程序配置文件（记录窗口大小、表格间距、文件打开位置、翻译引擎等）
+# 优先放在 exe 同级目录，若不可写则回退到 %APPDATA%/SubtitleForG
+# --------------------------------------------------------------------------
+DEFAULT_CONFIG = {
+    'window': {'width': 1100, 'height': 720, 'maximized': False},
+    'table': {'cell_padding': 4},
+    'last_dir': '',
+    'provider': 'mymemory',
+}
+
+
+def _config_path():
+    if getattr(sys, 'frozen', False):
+        cand = os.path.join(os.path.dirname(sys.executable), 'config.json')
+    else:
+        cand = os.path.join(HERE, 'config.json')
+    d = os.path.dirname(cand)
+    try:
+        if not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, '.writetest_subtitleforg')
+        with open(tmp, 'w') as f:
+            f.write('')
+        os.remove(tmp)
+        return cand
+    except Exception:
+        app = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'SubtitleForG')
+        os.makedirs(app, exist_ok=True)
+        return os.path.join(app, 'config.json')
+
+
+def _load_config():
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    try:
+        with open(_config_path(), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+    except Exception:
+        pass
+    return cfg
+
+
+def _save_config(cfg):
+    try:
+        with open(_config_path(), 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -128,6 +183,19 @@ def _run_on_ui(fn):
 # 暴露给前端的 JS API
 # --------------------------------------------------------------------------
 class Api:
+    def get_config(self):
+        return _load_config()
+
+    def save_config(self, patch):
+        cfg = _load_config()
+        for k, v in (patch or {}).items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+        _save_config(cfg)
+        return cfg
+
     def translate(self, payload):
         lines = payload.get('lines', []) or []
         provider = (payload.get('provider') or 'mymemory').lower()
@@ -148,10 +216,12 @@ class Api:
 
     def open_file(self):
         win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
         holder = {}
         def _show():
             holder['res'] = win.create_file_dialog(
                 webview.OPEN_DIALOG,
+                directory=init_dir,
                 allow_multiple=False,
                 file_types=('字幕文件 (*.srt)', '所有文件 (*.*)'),
             )
@@ -162,14 +232,20 @@ class Api:
         path = result[0] if isinstance(result, (list, tuple)) else result
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
             text = f.read()
+        # 记录本次打开所在目录，下次打开/另存默认定位到这里
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
         return {'path': path, 'text': text}
 
     def save_as(self, default_name, contents):
         win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
         holder = {}
         def _show():
             holder['res'] = win.create_file_dialog(
                 webview.SAVE_DIALOG,
+                directory=init_dir,
                 save_filename=default_name,
                 file_types=('SubRip 字幕 (*.srt)', '所有文件 (*.*)'),
             )
@@ -180,17 +256,70 @@ class Api:
         path = result[0] if isinstance(result, (list, tuple)) else result
         with open(path, 'w', encoding='utf-8') as f:
             f.write(contents)
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
         return path
 
 
 if __name__ == '__main__':
     threading.Thread(target=_serve, daemon=True).start()
     api = Api()
-    webview.create_window(
+    cfg = _load_config()
+    win_w = cfg['window'].get('width') or 1100
+    win_h = cfg['window'].get('height') or 720
+
+    window = webview.create_window(
         'Subtitle-for-G - 字幕双语编辑器',
         f'http://127.0.0.1:{PORT}',
         js_api=api,
-        width=1100,
-        height=720,
+        width=win_w,
+        height=win_h,
     )
+
+    # 窗口尺寸/最大化状态持久化
+    _resize_timer = None
+
+    def _persist_size():
+        c = _load_config()
+        c['window']['width'] = window.width
+        c['window']['height'] = window.height
+        _save_config(c)
+
+    def _on_resized():
+        global _resize_timer
+        if _resize_timer:
+            _resize_timer.cancel()
+        _resize_timer = threading.Timer(0.4, _persist_size)
+        _resize_timer.start()
+
+    def _on_closing():
+        _persist_size()
+        return True
+
+    def _on_maximized():
+        c = _load_config()
+        c['window']['maximized'] = True
+        _save_config(c)
+
+    def _on_restored():
+        c = _load_config()
+        c['window']['maximized'] = False
+        _save_config(c)
+
+    window.events.resized += _on_resized
+    window.events.closing += _on_closing
+    # 这两个事件在部分 pywebview 后端可能不存在，逐一定制订阅以保兼容
+    try:
+        window.events.maximized += _on_maximized
+    except Exception:
+        pass
+    try:
+        window.events.restored += _on_restored
+    except Exception:
+        pass
+
+    if cfg['window'].get('maximized'):
+        window.events.loaded += lambda: window.maximize()
+
     webview.start()

@@ -8,6 +8,7 @@
   --active-bg: #fff4d6;
   --active-border: #f0c060;
   --badge-bg: #eef1f5;
+  --cell-pad: 4px;
 }
 
 * {
@@ -95,6 +96,30 @@ button.primary:hover {
   padding: 6px 16px;
   border-bottom: 1px solid var(--border);
   background: #fbfcfd;
+}
+
+/* 翻译功能独立成的一行 */
+.toolbar.transbar {
+  background: #fbfcfd;
+}
+
+.pad-ctl {
+  gap: 6px;
+}
+
+.pad-ctl button {
+  width: 26px;
+  padding: 4px 0;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+}
+
+.pad-ctl #padVal {
+  min-width: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 /* 查找 / 替换栏 */
@@ -204,7 +229,7 @@ button.primary:hover {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 10px 12px;
+  padding: calc(var(--cell-pad) + 6px) calc(var(--cell-pad) * 2);
   font-size: 13px;
   font-weight: 600;
   color: var(--muted);
@@ -245,7 +270,7 @@ thead th.resizing .col-resizer {
 }
 
 .sub-table td {
-  padding: 4px 8px;
+  padding: var(--cell-pad) calc(var(--cell-pad) * 2);
   vertical-align: top;
   border-right: 1px solid #f0f2f5;
 }

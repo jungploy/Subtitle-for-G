@@ -18,3 +18,5 @@ python_app/dist/
 build_exe/
 build_tmp/
 *.spec
+# 运行时用户配置（窗口大小/表格间距/文件位置等，不应提交）
+config.json
