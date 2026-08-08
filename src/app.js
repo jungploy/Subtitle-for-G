@@ -14,7 +14,8 @@ let dirty = false;
 let currentSourcePath = '';
 
 const $ = (id) => document.getElementById(id);
-const statusEl = $('status');
+const statusEl = $('statusMsg');
+const statsEl = $('statusStats');
 
 // 是否运行在 Tauri 原生窗口（与 translate.js 的判定保持一致）
 function isTauri() {
@@ -29,9 +30,41 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+// 字幕时间码（00:00:00,000 / 00:00:00.000）-> 毫秒
+function timeToMs(t) {
+  const m = String(t).match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
+  if (!m) return 0;
+  const hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  const ss = parseInt(m[3], 10);
+  const ms = parseInt(m[4].padEnd(3, '0'), 10);
+  return ((hh * 60 + mm) * 60 + ss) * 1000 + ms;
+}
+
+// 毫秒 -> 总时长紧凑格式（H:MM:SS 或 MM:SS）
+function formatTotal(ms) {
+  const total = Math.max(0, Math.floor(ms));
+  const h = Math.floor(total / 3600000);
+  const m = Math.floor((total % 3600000) / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+// 状态栏右侧统计：字幕总行数 + 各条 cue 时长之和
+function updateStats() {
+  const items = editor.getItems() || [];
+  let total = 0;
+  for (const it of items) {
+    total += Math.max(0, timeToMs(it.end) - timeToMs(it.start));
+  }
+  statsEl.textContent = `共 ${items.length} 条 · 总时长 ${formatTotal(total)}`;
+}
+
 async function loadText(text) {
   const { items, bilingual } = parseSRT(text);
   editor.setItems(items);
+  updateStats();
   dirty = false;
   return { count: items.length, bilingual };
 }
@@ -118,6 +151,7 @@ function openProjectFromText(text, name) {
       return;
     }
     editor.setItems(items);
+    updateStats();
     dirty = false;
     if (meta.sourcePath) currentSourcePath = meta.sourcePath;
     setStatus(`已打开项目：${name}（${items.length} 条）`);

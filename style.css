@@ -97,6 +97,20 @@ button.primary:hover {
   border-top: 1px solid var(--border);
   background: #fbfcfd;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 状态栏右侧统计：字幕总行数、总时长 */
+.status-stats {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  color: var(--text);
+  white-space: nowrap;
 }
 
 /* 「打开」下拉按钮 */
