@@ -192,7 +192,8 @@ button.primary:hover {
 }
 
 .sub-table {
-  width: 100%;
+  min-width: 100%;
+  width: auto;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
@@ -202,8 +203,8 @@ button.primary:hover {
 .sub-table thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
-  padding: 10px 8px;
+  z-index: 2;
+  padding: 10px 12px;
   font-size: 13px;
   font-weight: 600;
   color: var(--muted);
@@ -214,10 +215,21 @@ button.primary:hover {
   user-select: none;
 }
 
-.sub-table thead th::after {
-  content: ' ▼';
-  font-size: 10px;
-  color: #c2c7cf;
+/* 列宽拖拽把手 */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 3;
+}
+
+.col-resizer:hover,
+thead th.resizing .col-resizer {
+  background: rgba(47, 111, 237, 0.28);
 }
 
 .sub-table tbody tr {
@@ -258,7 +270,7 @@ button.primary:hover {
 
 .col-source,
 .col-target {
-  width: auto;
+  width: 420px;
 }
 
 .cell-index {

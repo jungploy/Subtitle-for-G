@@ -8,12 +8,12 @@ export function createEditor(container, { onChange } = {}) {
       <div class="table-wrap">
         <table class="sub-table" id="subTable">
           <colgroup>
-            <col class="col-index" />
-            <col class="col-start" />
-            <col class="col-end" />
-            <col class="col-duration" />
-            <col class="col-source" />
-            <col class="col-target" />
+            <col class="col-index" style="width:56px" />
+            <col class="col-start" style="width:108px" />
+            <col class="col-end" style="width:108px" />
+            <col class="col-duration" style="width:80px" />
+            <col class="col-source" style="width:420px" />
+            <col class="col-target" style="width:420px" />
           </colgroup>
           <thead>
             <tr>
@@ -32,6 +32,7 @@ export function createEditor(container, { onChange } = {}) {
 
   const tbody = container.querySelector('#rowsBody');
   const table = container.querySelector('#subTable');
+  const cols = table.querySelectorAll('colgroup col');
   let items = [];
   let activeIndex = -1;
   let matchEl = null;
@@ -211,6 +212,39 @@ export function createEditor(container, { onChange } = {}) {
     }
     setActive(i);
   }
+
+  // 列宽拖拽：在表头右缘放一个把手，拖动时直接改对应 <col> 的像素宽
+  function setupResizers() {
+    const ths = table.querySelectorAll('thead th');
+    ths.forEach((th, idx) => {
+      if (idx >= cols.length) return;
+      const resizer = document.createElement('span');
+      resizer.className = 'col-resizer';
+      th.appendChild(resizer);
+      resizer.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const col = cols[idx];
+        const startX = e.clientX;
+        const startW = col.getBoundingClientRect().width;
+        document.body.style.cursor = 'col-resize';
+        th.classList.add('resizing');
+        function onMove(ev) {
+          const newW = Math.max(40, Math.round(startW + (ev.clientX - startX)));
+          col.style.width = newW + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          document.body.style.cursor = '';
+          th.classList.remove('resizing');
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  }
+  setupResizers();
 
   return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch };
 }
