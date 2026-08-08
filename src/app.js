@@ -57,37 +57,41 @@ $('fileInput').addEventListener('change', async (e) => {
   setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
-// 打开文件：Tauri 用原生对话框 + Rust 读取；pywebview 用 Python 原生对话框；
+// 打开 SRT / 字幕文件：Tauri 用原生对话框 + Rust 读取；pywebview 用 Python 原生对话框；
 // 浏览器用隐藏 fileInput 回退
-$('openFile').addEventListener('click', async () => {
+function openSrt() {
   if (isTauri()) {
     try {
-      const path = await window.__TAURI__.dialog.open({
-        multiple: false,
-        filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'txt'] }],
-      });
-      if (!path) return;
-      const text = await window.__TAURI__.core.invoke('read_file', { path });
-      currentSourcePath = path;
-      const r = await loadText(text);
-      setStatus(`已打开：${path}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+      return (async () => {
+        const path = await window.__TAURI__.dialog.open({
+          multiple: false,
+          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'txt'] }],
+        });
+        if (!path) return;
+        const text = await window.__TAURI__.core.invoke('read_file', { path });
+        currentSourcePath = path;
+        const r = await loadText(text);
+        setStatus(`已打开：${path}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+      })().catch((e) => setStatus('打开失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
     }
   } else if (isPyWebView()) {
     try {
-      const r = await window.pywebview.api.open_file();
-      if (!r) return;
-      currentSourcePath = r.path;
-      const info = await loadText(r.text);
-      setStatus(`已打开：${r.path}（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
+      return (async () => {
+        const r = await window.pywebview.api.open_file();
+        if (!r) return;
+        currentSourcePath = r.path;
+        const info = await loadText(r.text);
+        setStatus(`已打开：${r.path}（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
+      })().catch((e) => setStatus('打开失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
     }
   } else {
     $('fileInput').click();
   }
-});
+}
 
 // 下载导出（浏览器回退）
 function download(filename, text) {
@@ -160,31 +164,35 @@ function openProjectFromText(text, name) {
 }
 
 // 打开项目：Tauri 用原生对话框；pywebview 用 Python 原生对话框；浏览器用 fileInput 回退
-$('openProject').addEventListener('click', async () => {
+function openProject() {
   if (isTauri()) {
     try {
-      const path = await window.__TAURI__.dialog.open({
-        multiple: false,
-        filters: [{ name: '字幕项目', extensions: ['gsub'] }],
-      });
-      if (!path) return;
-      const text = await window.__TAURI__.core.invoke('read_file', { path });
-      openProjectFromText(text, path);
+      return (async () => {
+        const path = await window.__TAURI__.dialog.open({
+          multiple: false,
+          filters: [{ name: '字幕项目', extensions: ['gsub'] }],
+        });
+        if (!path) return;
+        const text = await window.__TAURI__.core.invoke('read_file', { path });
+        openProjectFromText(text, path);
+      })().catch((e) => setStatus('打开项目失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开项目失败：' + (e?.message || e));
     }
   } else if (isPyWebView()) {
     try {
-      const r = await window.pywebview.api.open_project();
-      if (!r) return;
-      openProjectFromText(r.text, r.path);
+      return (async () => {
+        const r = await window.pywebview.api.open_project();
+        if (!r) return;
+        openProjectFromText(r.text, r.path);
+      })().catch((e) => setStatus('打开项目失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开项目失败：' + (e?.message || e));
     }
   } else {
     $('fileInput').click(); // 浏览器回退：change 内按扩展名路由到项目解析
   }
-});
+}
 
 // 保存项目：把当前所有字幕（时间码/原文/译文）与元数据写成 .gsub（XML）
 async function saveProject() {
@@ -563,6 +571,43 @@ $('padPlus').addEventListener('click', () => {
 // 翻译引擎变更时记录
 $('provider').addEventListener('change', () => {
   saveConfig({ provider: $('provider').value });
+});
+
+// --------------------------------------------------------------------------
+// 「打开」按钮下拉：默认（直接点击）打开项目文件，下拉可切换为打开 SRT / 字幕
+// --------------------------------------------------------------------------
+const openDropdown = $('openDropdown');
+const openMenu = $('openMenu');
+const openCaret = $('openCaret');
+
+function toggleOpenMenu(show) {
+  const willShow = show === undefined ? openMenu.hidden : show;
+  openMenu.hidden = !willShow;
+  openCaret.setAttribute('aria-expanded', String(willShow));
+}
+
+// 直接点击「打开」主按钮：默认打开项目文件（.gsub）
+$('openBtn').addEventListener('click', () => {
+  openProject();
+});
+
+openCaret.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleOpenMenu();
+});
+
+openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
+  item.addEventListener('click', () => {
+    toggleOpenMenu(false);
+    const action = item.dataset.action;
+    if (action === 'srt') openSrt();
+    else openProject();
+  });
+});
+
+// 点击页面其它位置关闭下拉菜单
+document.addEventListener('click', (e) => {
+  if (!openDropdown.contains(e.target)) openMenu.hidden = true;
 });
 
 // 首次自动加载示例，便于立即预览
