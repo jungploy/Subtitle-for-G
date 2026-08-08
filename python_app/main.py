@@ -261,6 +261,56 @@ class Api:
         _save_config(cfg)
         return path
 
+    def open_project(self):
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=init_dir,
+                allow_multiple=False,
+                file_types=('字幕项目 (*.gsub)', '所有文件 (*.*)'),
+            )
+
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return {'path': path, 'text': text}
+
+    def save_project(self, default_name, contents):
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=init_dir,
+                save_filename=default_name,
+                file_types=('字幕项目 (*.gsub)', '所有文件 (*.*)'),
+            )
+
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(contents)
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return path
+
 
 if __name__ == '__main__':
     threading.Thread(target=_serve, daemon=True).start()

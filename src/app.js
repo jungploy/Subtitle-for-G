@@ -2,6 +2,7 @@
 import { parseSRT, serializeSRT } from './srt.js';
 import { createEditor } from './editor.js';
 import { translateLines } from './translate.js';
+import { serializeProject, parseProject } from './project.js';
 
 const editor = createEditor(document.getElementById('editorMount'), {
   onChange: () => {
@@ -9,6 +10,8 @@ const editor = createEditor(document.getElementById('editorMount'), {
   },
 });
 let dirty = false;
+// 当前打开的源文件路径（用于保存项目时写进 meta；浏览器环境下仅保留文件名）
+let currentSourcePath = '';
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $('status');
@@ -40,11 +43,17 @@ $('loadSample').addEventListener('click', async () => {
   setStatus(`已加载示例 ${r.count} 条${r.bilingual ? '（已识别双语，分列两侧）' : ''}`);
 });
 
-// 上传本地字幕文件（浏览器回退）
+// 上传本地文件（浏览器回退）：按扩展名路由 —— .gsub 走项目解析，其余走字幕解析
 $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  const r = await loadText(await f.text());
+  const text = await f.text();
+  if (f.name.toLowerCase().endsWith('.gsub')) {
+    openProjectFromText(text, f.name);
+    return;
+  }
+  currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
+  const r = await loadText(text);
   setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
@@ -59,6 +68,7 @@ $('openFile').addEventListener('click', async () => {
       });
       if (!path) return;
       const text = await window.__TAURI__.core.invoke('read_file', { path });
+      currentSourcePath = path;
       const r = await loadText(text);
       setStatus(`已打开：${path}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
     } catch (e) {
@@ -68,6 +78,7 @@ $('openFile').addEventListener('click', async () => {
     try {
       const r = await window.pywebview.api.open_file();
       if (!r) return;
+      currentSourcePath = r.path;
       const info = await loadText(r.text);
       setStatus(`已打开：${r.path}（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
     } catch (e) {
@@ -125,6 +136,97 @@ $('exportTranslate').addEventListener('click', () =>
 $('exportBilingual').addEventListener('click', () =>
   doExport('bilingual', 'subtitle_bilingual.srt', '已导出双语 SRT')
 );
+
+// --------------------------------------------------------------------------
+// 项目文件（.gsub / XML）：打开项目、保存项目
+// --------------------------------------------------------------------------
+const PROJECT_DEFAULT_NAME = 'subtitle_project.gsub';
+
+// 用项目文本载入编辑器（被「打开项目」按钮与 .gsub 文件拖入/选择复用）
+function openProjectFromText(text, name) {
+  try {
+    const { items, meta } = parseProject(text);
+    if (!items.length) {
+      setStatus('项目文件为空，没有可载入的字幕');
+      return;
+    }
+    editor.setItems(items);
+    dirty = false;
+    if (meta.sourcePath) currentSourcePath = meta.sourcePath;
+    setStatus(`已打开项目：${name}（${items.length} 条）`);
+  } catch (e) {
+    setStatus('项目解析失败：' + (e.message || e));
+  }
+}
+
+// 打开项目：Tauri 用原生对话框；pywebview 用 Python 原生对话框；浏览器用 fileInput 回退
+$('openProject').addEventListener('click', async () => {
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.open({
+        multiple: false,
+        filters: [{ name: '字幕项目', extensions: ['gsub'] }],
+      });
+      if (!path) return;
+      const text = await window.__TAURI__.core.invoke('read_file', { path });
+      openProjectFromText(text, path);
+    } catch (e) {
+      setStatus('打开项目失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const r = await window.pywebview.api.open_project();
+      if (!r) return;
+      openProjectFromText(r.text, r.path);
+    } catch (e) {
+      setStatus('打开项目失败：' + (e?.message || e));
+    }
+  } else {
+    $('fileInput').click(); // 浏览器回退：change 内按扩展名路由到项目解析
+  }
+});
+
+// 保存项目：把当前所有字幕（时间码/原文/译文）与元数据写成 .gsub（XML）
+async function saveProject() {
+  const items = editor.getItems();
+  if (!items.length) {
+    setStatus('没有可保存的内容');
+    return;
+  }
+  const hasTarget = items.some((it) => (it.target || '').trim().length);
+  const xml = serializeProject(items, {
+    sourcePath: currentSourcePath,
+    bilingual: hasTarget,
+    created: new Date().toISOString(),
+  });
+
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.save({
+        defaultPath: PROJECT_DEFAULT_NAME,
+        filters: [{ name: '字幕项目', extensions: ['gsub'] }],
+      });
+      if (!path) return;
+      await window.__TAURI__.core.invoke('write_file', { path, contents: xml });
+      setStatus(`项目已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存项目失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const path = await window.pywebview.api.save_project(PROJECT_DEFAULT_NAME, xml);
+      if (!path) return;
+      setStatus(`项目已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存项目失败：' + (e?.message || e));
+    }
+  } else {
+    download(PROJECT_DEFAULT_NAME, xml);
+    setStatus('已导出项目文件 .gsub');
+  }
+}
+
+$('saveProject').addEventListener('click', saveProject);
 
 // 交换左右：把每一条的原文(source)与译文(target)原地互换（不重建 DOM，视图必刷新）
 $('swapSides').addEventListener('click', () => {
@@ -357,7 +459,13 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files?.[0];
   if (!f) return;
-  const r = await loadText(await f.text());
+  const text = await f.text();
+  if (f.name.toLowerCase().endsWith('.gsub')) {
+    openProjectFromText(text, f.name);
+    return;
+  }
+  currentSourcePath = f.name;
+  const r = await loadText(text);
   setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
