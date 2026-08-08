@@ -55,9 +55,11 @@ export function renderRich(raw) {
 
 /**
  * 从富文本 / 字幕标记文本里抽取纯文字（去掉所有标签），用于翻译、查找、替换。
+ * 行内 <br> 先还原成换行，避免跨行文字被接成一行。
  */
 export function plainText(html) {
   return String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/?[^>]+>/g, '')
     .replace(new RegExp(OPEN + '|' + CLOSE, 'g'), '');
 }

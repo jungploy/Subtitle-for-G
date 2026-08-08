@@ -3,7 +3,7 @@ import { parseSRT } from './srt.js';
 import { createEditor } from './editor.js';
 import { translateLines } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
-import { plainText } from './rich.js';
+import { plainText, renderRich } from './rich.js';
 
 const editor = createEditor(document.getElementById('editorMount'), {
   onChange: () => {
@@ -37,9 +37,23 @@ function updateStats() {
   statsEl.textContent = `共 ${items.length} 条`;
 }
 
+// 把模型中存储的文本统一规范为「显示用 HTML」：
+// - 含换行或 <font> 的原始字幕标记 -> 经 renderRich 转成安全的 HTML（去大小/颜色，留 b/i，换行转 <br>）；
+// - 已是 HTML（含 <br>、<b> 等，来自之前保存的 .gsub）→ 原样返回。
+function toHtml(s) {
+  if (!s) return '';
+  if (/[\n\r]/.test(s) || /<font\b/i.test(s)) return renderRich(s);
+  return s;
+}
+
 async function loadText(text) {
   const { items, bilingual } = parseSRT(text);
-  editor.setItems(items);
+  const htmlItems = items.map((it) => ({
+    ...it,
+    source: toHtml(it.source),
+    target: toHtml(it.target),
+  }));
+  editor.setItems(htmlItems);
   updateStats();
   dirty = false;
   return { count: items.length, bilingual };
@@ -126,7 +140,14 @@ function openProjectFromText(text, name) {
       setStatus('项目文件为空，没有可载入的字幕');
       return;
     }
-    editor.setItems(items);
+    // 旧版 .gsub 存的是原始字幕标记（含换行 / <font>），这里统一规范为显示用 HTML；
+    // 新版 .gsub 已是 HTML，toHtml 会原样返回。
+    const htmlItems = items.map((it) => ({
+      ...it,
+      source: toHtml(it.source),
+      target: toHtml(it.target),
+    }));
+    editor.setItems(htmlItems);
     updateStats();
     dirty = false;
     if (meta.sourcePath) currentSourcePath = meta.sourcePath;
@@ -498,6 +519,22 @@ $('translateAll').addEventListener('click', () => doTranslate('all'));
 $('translateSelected').addEventListener('click', () => doTranslate('selected'));
 
 // --------------------------------------------------------------------------
+// 字体格式工具栏：选中单元格里的文字 -> 加粗 / 斜体 / 下划线
+// --------------------------------------------------------------------------
+function wireFormatBtn(id, cmd) {
+  const btn = $(id);
+  // 按下时不抢走单元格焦点，否则选区会被清空、execCommand 无处可用
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const ok = editor.applyFormat(cmd);
+    if (!ok) setStatus('请先在某个单元格里选中要格式化的文字，再点击格式按钮');
+  });
+}
+wireFormatBtn('fmtBold', 'bold');
+wireFormatBtn('fmtItalic', 'italic');
+wireFormatBtn('fmtUnderline', 'underline');
+
+// --------------------------------------------------------------------------
 // 程序配置：窗口大小 / 表格间距 / 文件打开位置 / 翻译引擎 由 Python 端读写 config.json
 // --------------------------------------------------------------------------
 let cellPad = 4;
@@ -585,6 +622,12 @@ document.addEventListener('click', (e) => {
 
 // 首次自动加载示例，便于立即预览
 window.addEventListener('DOMContentLoaded', async () => {
+  // 让字体格式按钮 / 原生 Ctrl+B/I/U 生成 <b>/<i>/<u> 表现型标签，而非内联 style
+  try {
+    document.execCommand('styleWithCSS', false, false);
+  } catch (e) {
+    /* 忽略：部分环境不支持该命令，不影响手动点击按钮（applyFormat 内也会再设一次） */
+  }
   await loadConfig();
   $('loadSample').click();
 });

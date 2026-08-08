@@ -47,6 +47,14 @@
       </label>
     </div>
 
+    <!-- 字体格式工具栏：选中单元格里的文字后点击，对选区应用加粗/斜体/下划线 -->
+    <div class="toolbar formatbar">
+      <span class="fmt-label">字体格式</span>
+      <button id="fmtBold" class="fmt-btn" title="加粗 (Ctrl+B)" style="font-weight:700">B</button>
+      <button id="fmtItalic" class="fmt-btn" title="斜体 (Ctrl+I)" style="font-style:italic">I</button>
+      <button id="fmtUnderline" class="fmt-btn" title="下划线 (Ctrl+U)" style="text-decoration:underline">U</button>
+    </div>
+
     <!-- 全文查找 / 替换栏 -->
     <div class="findbar" id="findBar" hidden>
       <input type="text" id="findQuery" placeholder="查找…" />

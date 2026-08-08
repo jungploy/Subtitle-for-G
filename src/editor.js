@@ -1,9 +1,9 @@
 // src/editor.js
 // 表格方式的双语字幕编辑器：序号 / 起始时码 / 结束时码 / 时长 / 原文 / 译文
 // 每行同一 <tr>，天然等高；原文/译文文本框自动撑高。
-// 原文/译文单元格为富文本：保留字幕里的字体标记（大小/颜色/粗体/斜体），不显示标签本身。
-
-import { renderRich } from './rich.js';
+// 原文/译文单元格均为富文本（contentEditable）：模型里存的是「显示用 HTML」
+// （保留 <b>/<i>/<u> 与 <br>），编辑时直接读写 innerHTML，加粗/斜体/下划线等
+// 格式变化随之落盘、并随 .gsub 项目文件往返。
 
 export function createEditor(container, { onChange } = {}) {
   container.innerHTML = `
@@ -38,6 +38,8 @@ export function createEditor(container, { onChange } = {}) {
   const cols = table.querySelectorAll('colgroup col');
   let items = [];
   let activeIndex = -1;
+  let activeEl = null; // 当前聚焦的富文本单元格（用于字体格式按钮）
+  let activeSide = null; // 'source' | 'target'
   let matchEl = null;
 
   // SRT 时间码 -> 毫秒
@@ -73,17 +75,29 @@ export function createEditor(container, { onChange } = {}) {
     return { td };
   }
 
-  // 富文本单元格：用 div 承载 renderRich 结果（标记隐藏、字体样式生效）。
-  // source 只读展示；target 可编辑，编辑时取 innerText（保留换行）写回模型。
-  function makeRichCell(cls, raw, editable = false) {
+  // 富文本单元格：用 div 承载「显示用 HTML」，原文与译文均可在单元格里直接编辑。
+  // 模型里存的就是 innerHTML（含 <b>/<i>/<u>/<br>），编辑时直接读写，格式变化可落盘。
+  function makeRichCell(cls, html, side, i) {
     const td = document.createElement('td');
     td.className = cls;
     const div = document.createElement('div');
     div.className = cls.replace('cell-', '') + '-line';
-    div.innerHTML = renderRich(raw);
-    div.contentEditable = editable ? 'true' : 'false';
-    if (editable) div.spellcheck = false;
+    div.innerHTML = html || '';
+    div.contentEditable = 'true';
+    div.spellcheck = false;
+    div.dataset.side = side;
     td.appendChild(div);
+
+    div.addEventListener('input', () => {
+      items[i][side] = div.innerHTML;
+      autoGrow(div);
+      onChange && onChange(items);
+    });
+    div.addEventListener('focus', () => {
+      activeEl = div;
+      activeSide = side;
+      setActive(i);
+    });
     return { td, div };
   }
 
@@ -102,8 +116,8 @@ export function createEditor(container, { onChange } = {}) {
     const endTd = makeCell('cell-end', it.end || '');
     const durTd = makeCell('cell-duration', duration(it.start, it.end));
 
-    const sourceCell = makeRichCell('cell-source', it.source, false);
-    const targetCell = makeRichCell('cell-target', it.target, true);
+    const sourceCell = makeRichCell('cell-source', it.source, 'source', i);
+    const targetCell = makeRichCell('cell-target', it.target, 'target', i);
 
     [idxTd, startTd, endTd, durTd, sourceCell, targetCell].forEach((c) =>
       tr.appendChild(c.td || c)
@@ -113,14 +127,7 @@ export function createEditor(container, { onChange } = {}) {
     const targetEl = targetCell.div;
     targetEl.dataset.placeholder = '在此输入翻译…';
 
-    targetEl.addEventListener('input', () => {
-      items[i].target = targetEl.innerText;
-      autoGrow(targetEl);
-      onChange && onChange(items);
-    });
-
     tr.addEventListener('click', () => setActive(i));
-    targetEl.addEventListener('focus', () => setActive(i));
 
     // 首渲染后让单元格自适应高度
     requestAnimationFrame(() => {
@@ -175,7 +182,7 @@ export function createEditor(container, { onChange } = {}) {
       if (!tr) return;
       const el = tr.querySelector('.target-line');
       if (el) {
-        el.innerHTML = renderRich(it.target || '');
+        el.innerHTML = it.target || '';
         autoGrow(el);
       }
     });
@@ -189,7 +196,7 @@ export function createEditor(container, { onChange } = {}) {
     if (!tr) return;
     const el = tr.querySelector('.source-line');
     if (el) {
-      el.innerHTML = renderRich(val);
+      el.innerHTML = val;
       autoGrow(el);
     }
   }
@@ -257,15 +264,31 @@ export function createEditor(container, { onChange } = {}) {
       const sEl = tr.querySelector('.source-line');
       const tEl = tr.querySelector('.target-line');
       if (sEl) {
-        sEl.innerHTML = renderRich(it.source);
+        sEl.innerHTML = it.source;
         autoGrow(sEl);
       }
       if (tEl) {
-        tEl.innerHTML = renderRich(it.target);
+        tEl.innerHTML = it.target;
         autoGrow(tEl);
       }
     });
   }
 
-  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides };
+  // 字体格式：对当前聚焦单元格里的选区应用 加粗/斜体/下划线。
+  // 按钮在 mousedown 时已 preventDefault，焦点与选区仍停留在编辑区，execCommand 可作用于选区。
+  // styleWithCSS=false 让浏览器用 <b>/<i>/<u> 等表现型标签而非内联 style。
+  function applyFormat(cmd) {
+    if (!activeEl) return false;
+    try {
+      document.execCommand('styleWithCSS', false, false);
+      document.execCommand(cmd);
+      items[activeIndex][activeSide] = activeEl.innerHTML;
+      onChange && onChange(items);
+    } catch (e) {
+      return false;
+    }
+    return true;
+  }
+
+  return { setItems, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat };
 }
