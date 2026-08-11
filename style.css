@@ -115,6 +115,13 @@ body {
   vertical-align: middle;
 }
 
+/* 表格工具条右侧分组：字数控制 + 间距，紧挨在一起（不随 space-between 被推散） */
+.toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* 表格工具条「同步断句」开关（删除按钮之后） */
 .sync-split-ctl {
   display: inline-flex;
