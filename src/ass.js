@@ -64,6 +64,8 @@ function toContentLines(text) {
  *     - target: 译文文本（单语文件为空；双语文件自动填充）
  *   bilingual: 是否识别为双语（过半 Dialogue 块首两行分属不同文字体系）
  */
+import { normalizeNonChinese } from './textnorm.js';
+
 export function parseAss(text) {
   if (!text || !text.trim()) return { items: [], bilingual: false };
 
@@ -125,7 +127,13 @@ export function parseAss(text) {
       source = e.content.join('\n');
       target = '';
     }
-    return { index: i + 1, start: e.start, end: e.end, source, target };
+    return {
+      index: i + 1,
+      start: e.start,
+      end: e.end,
+      source: normalizeNonChinese(source),
+      target: normalizeNonChinese(target),
+    };
   });
 
   return { items, bilingual };

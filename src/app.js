@@ -5,6 +5,7 @@ import { createEditor } from './editor.js';
 import { translateLines, translateDocument, normalizeTranslationLine, alignSegments } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
 import { plainText, renderRich, replaceRich } from './rich.js';
+import { normalizeNonChinese } from './textnorm.js';
 
 // 编辑会话快照：进入单元格编辑（focus）时记下修改前的整表状态，
 // 失焦（blur）时若确有改动则生成一条「编辑」修改记录；离散操作（互换/替换/翻译）
@@ -309,15 +310,27 @@ function parseLinesToItems(text) {
   const items = [];
   const GAP = 3000;
   let n = 0;
+  // 双语纯文本导出格式：原文 + 「\\」两个反斜杠 + 译文（单行）。导入时按两个反斜杠拆回两列。
+  const BS2 = String.fromCharCode(92, 92);
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
+    let source = line;
+    let target = '';
+    const sep = line.indexOf(BS2);
+    if (sep !== -1) {
+      source = line.slice(0, sep);
+      target = line.slice(sep + 2);
+    }
+    // 非中文文本的中文全角标点归一化为英文标点（中文原文保持不变）
+    source = normalizeNonChinese(source);
+    target = normalizeNonChinese(target);
     items.push({
       index: 0,
       start: msToTimeJs(n * GAP),
       end: msToTimeJs((n + 1) * GAP),
-      source: line,
-      target: '',
+      source,
+      target,
     });
     n += 1;
   }
@@ -405,7 +418,8 @@ $('fileInput').addEventListener('change', async (e) => {
   if (f.name.toLowerCase().endsWith('.txt')) {
     currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
     const items = parseLinesToItems(text);
-    applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → 原文）`);
+    const bil = items.some((it) => it.target && it.target.trim());
+    applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
     return;
   }
   currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
@@ -458,7 +472,8 @@ function importTxt() {
         if (!r) return;
         currentSourcePath = r.path || '';
         const items = parseLinesToItems(r.text);
-        await applyImportedItems(items, `已导入文本：${r.path}（${items.length} 条 → 原文）`);
+        const bil = items.some((it) => it.target && it.target.trim());
+        await applyImportedItems(items, `已导入文本：${r.path}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
       })().catch((e) => setStatus('导入失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('导入失败：' + (e?.message || e));
@@ -685,18 +700,19 @@ function exportLines(it, content) {
   const t = plainText(it.target || '');
   if (content === 'source') return [s].filter(Boolean);
   if (content === 'target') return [t || s].filter(Boolean); // 译文为空时回退原文
-  const parts = []; // bilingual：原文 + 译文（双行）
+  // bilingual（纯文本）：原文与译文用两个反斜杠连成一行，如「原文\\译文」
+  const parts = [];
   if (s) parts.push(s);
   if (t) parts.push(t);
-  return parts;
+  return [parts.join('\\\\')].filter(Boolean);
 }
 
-// 纯文本：每条之间空一行分隔
+// 纯文本：每条之间不空行（单换行相连）；双语每条内为「原文\\译文」单行
 function buildTxt(plain, content) {
   const blocks = plain
     .map((it) => exportLines(it, content).join('\n'))
     .filter((b) => b.length);
-  return (blocks.length ? blocks.join('\n\n') + '\n' : '');
+  return (blocks.length ? blocks.join('\n') + '\n' : '');
 }
 
 // SRT：序号 + 时间轴 + 内容块
@@ -793,38 +809,8 @@ async function doExportDirect(content, format) {
   }
 }
 
-// 绑定一个「导出」一级菜单（导出原文 / 导出译文 / 导出全部）：主按钮与 ▾ 都展开二级菜单，
-// 二级菜单的三项（纯文本 / SRT / WebVTT）点击后直接按对应格式导出。
-function wireExportMenu(dropdownId, content) {
-  const dd = $(dropdownId);
-  if (!dd) return;
-  const menu = dd.querySelector('.dropdown-menu');
-  const caret = dd.querySelector('.caret');
-  const main = dd.querySelector('.drop-toggle');
-  const toggle = (show) => {
-    const willShow = show === undefined ? menu.hidden : show;
-    menu.hidden = !willShow;
-    if (caret) caret.setAttribute('aria-expanded', String(willShow));
-  };
-  if (main) {
-    main.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
-  }
-  if (caret) {
-    caret.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
-  }
-  menu.querySelectorAll('.dropdown-item').forEach((item) => {
-    item.addEventListener('click', () => {
-      toggle(false);
-      const fmt = item.dataset.format;
-      if (fmt) doExportDirect(content, fmt);
-    });
-  });
-}
-
-// 三个一级导出菜单：各自二级菜单为 纯文本 / SRT / WebVTT
-wireExportMenu('exportSourceDropdown', 'source');
-wireExportMenu('exportTargetDropdown', 'target');
-wireExportMenu('exportAllDropdown', 'bilingual');
+// 导出原文 / 导出译文 / 导出全部 已作为「保存项目」下拉菜单内的二级子菜单（见 index.html #saveMenu），
+// 其格式项带 data-export + data-format，点击处理在下方 saveMenu 的 click 委托中。
 
 // 交换左右：把每一条的原文(source)与译文(target)原地互换（不重建 DOM，视图必刷新）
 $('swapSides').addEventListener('click', () => {
@@ -1434,10 +1420,12 @@ async function loadConfig() {
     const cfg = await window.pywebview.api.get_config();
     if (cfg?.provider) $('provider').value = cfg.provider;
     if (typeof cfg?.wholeDocMode === 'boolean') $('wholeDocMode').checked = cfg.wholeDocMode;
-    if (typeof cfg?.syncSplitMode === 'boolean') {
-      $('syncSplit').checked = cfg.syncSplitMode;
-      editor.setSyncSplit(cfg.syncSplitMode);
-    }
+    // 「同步断句」：从配置读取（缺省 false=不勾选），统一 UI 勾选态与编辑器内部状态，
+    // 并写回配置文件，保证「UI / 引擎 / 配置」三者一致。
+    const syncSplit = typeof cfg?.syncSplitMode === 'boolean' ? cfg.syncSplitMode : false;
+    $('syncSplit').checked = syncSplit;
+    editor.setSyncSplit(syncSplit);
+    saveConfig({ syncSplitMode: syncSplit });
     if (typeof cfg?.table?.cell_padding === 'number') {
       applyCellPadding(cfg.table.cell_padding);
     }
@@ -1510,17 +1498,6 @@ openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
 document.addEventListener('click', (e) => {
   if (!openDropdown.contains(e.target)) openMenu.hidden = true;
   if (!saveDropdown.contains(e.target)) saveMenu.hidden = true;
-  // 点击页面其它位置关闭三个导出菜单
-  ['exportSourceDropdown', 'exportTargetDropdown', 'exportAllDropdown'].forEach((id) => {
-    const dd = $(id);
-    if (!dd) return;
-    if (!dd.contains(e.target)) {
-      const m = dd.querySelector('.dropdown-menu');
-      if (m) m.hidden = true;
-      const c = dd.querySelector('.caret');
-      if (c) c.setAttribute('aria-expanded', 'false');
-    }
-  });
 });
 
 // --------------------------------------------------------------------------
@@ -1543,10 +1520,23 @@ saveCaret.addEventListener('click', (e) => {
 
 saveMenu.querySelectorAll('.dropdown-item').forEach((item) => {
   item.addEventListener('click', () => {
-    toggleSaveMenu(false);
     const action = item.dataset.action;
-    if (action === 'saveAs') saveProjectAs();
-    else saveProject();
+    const exp = item.dataset.export;
+    const fmt = item.dataset.format;
+    // 导出子菜单项：直接按 content + format 导出并关闭菜单
+    if (exp && fmt) {
+      toggleSaveMenu(false);
+      doExportDirect(exp, fmt);
+      return;
+    }
+    if (action === 'saveAs') {
+      toggleSaveMenu(false);
+      saveProjectAs();
+      return;
+    }
+    // 其余菜单项（当前无其它项）按「保存项目」处理
+    toggleSaveMenu(false);
+    saveProject();
   });
 });
 

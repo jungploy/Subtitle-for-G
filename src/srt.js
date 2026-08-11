@@ -1,6 +1,8 @@
 // src/srt.js
 // SRT 字幕解析与序列化
 
+import { normalizeNonChinese } from './textnorm.js';
+
 const TIME_RE =
   /^\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})/;
 
@@ -154,7 +156,11 @@ export function parseSRT(text, opts = {}) {
     i += 1;
   }
 
-  const items = merged;
+  const items = merged.map((it) => ({
+    ...it,
+    source: normalizeNonChinese(it.source),
+    target: normalizeNonChinese(it.target),
+  }));
   const bilingual =
     opts.bilingual === true
       ? true

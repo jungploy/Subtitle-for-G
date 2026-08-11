@@ -368,6 +368,46 @@ button.primary:hover {
   background: #f0f4fb;
 }
 
+/* 保存菜单内的导出二级子菜单（悬浮向右飞出） */
+.submenu-item {
+  position: relative;
+}
+.submenu-item .submenu {
+  position: absolute;
+  left: 100%;
+  top: -1px;
+  min-width: 190px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 40;
+}
+.submenu-item:hover > .submenu {
+  display: flex;
+}
+.submenu-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+.submenu-label .sub-caret {
+  margin-left: 20px;
+  opacity: 0.5;
+  font-size: 12px;
+}
+
 .pad-ctl {
   gap: 6px;
 }

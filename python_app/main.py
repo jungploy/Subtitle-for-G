@@ -341,6 +341,59 @@ def _is_credit_line(line):
     return bool(_CREDIT_RE.match(s))
 
 
+# 导入归一化：把「非中文文本」里的中文全角标点转成英文 ASCII 标点。
+# 中文（含 CJK 表意文字）文本不处理，保留原本的中文标点，避免破坏原文。
+_CN_PUNCT = {
+    '\uFF0C': ',',   # ，
+    '\u3002': '.',   # 。
+    '\u3001': ',',   # 、
+    '\uFF1B': ';',   # ；
+    '\uFF1A': ':',   # ：
+    '\uFF1F': '?',   # ？
+    '\uFF01': '!',   # ！
+    '\uFF08': '(',   # （
+    '\uFF09': ')',   # ）
+    '\u201C': '"',   # “
+    '\u201D': '"',   # ”
+    '\u2018': "'",   # ‘
+    '\u2019': "'",   # ’
+    '\u300C': '"',   # 「
+    '\u300D': '"',   # 」
+    '\u300E': '"',   # 『
+    '\u300F': '"',   # 』
+    '\u3010': '[',   # 【
+    '\u3011': ']',   # 】
+    '\u300A': '"',   # 《
+    '\u300B': '"',   # 》
+    '\uFF5E': '~',   # ～
+    '\u3000': ' ',   # 　 全角空格
+}
+
+
+def _looks_chinese(text):
+    # 仅识别 CJK 表意文字（不含全角标点），避免把含全角标点的纯英文误判为中文
+    return bool(re.search(r'[\u3400-\u9fff]', text or ''))
+
+
+def _normalize_cjk_punct(text):
+    if not text:
+        return text
+    out = re.sub(r'\u2026+', '...', text)  # 省略号（……）折叠为一个 ...
+    for k, v in _CN_PUNCT.items():
+        if k in out:
+            out = out.replace(k, v)
+    return out
+
+
+def _normalize_docx_items(items):
+    for it in items:
+        for key in ('source', 'target'):
+            val = it.get(key) or ''
+            if val and not _looks_chinese(val):
+                it[key] = _normalize_cjk_punct(val)
+    return items
+
+
 def _parse_docx(path):
     """解析 .docx：提取段落文本，识别时间码行（H:MM:SS:FF / H:MM:SS,mmm 等），
     把相邻时间码之间的文本聚合成一条字幕；无时间码则按非空段落逐行导入。
@@ -420,7 +473,7 @@ def _parse_docx(path):
                 'source': text,
                 'target': '',
             })
-        return items
+        return _normalize_docx_items(items)
 
     if mmss_idx and len(mmss_idx) >= 2:
         # 仅带 MM:SS 片段标记（纪录片脚本常见，如 00:46 / 02:35）：
@@ -450,7 +503,72 @@ def _parse_docx(path):
                 'source': text,
                 'target': '',
             })
-        return items
+        return _normalize_docx_items(items)
+
+    # 双语交错：段落严格中英交替（CN|EN 两列表格按行铺平，呈 CLCLCL…），
+    # 既无 SRT 时间码也无 MM:SS 片段标记。把每个「中文段 + 紧随的英文段」配对为
+    # 一条双语字幕（中文 source、英文 target）；顺序给占位时码（每条 3 秒）。
+    # 注意：只认 CJK 表意文字（汉字），不要把全角标点(？、，等)算作"中文"，
+    # 否则英文句末带中文标点的行会被误判为中文，破坏中英交替模式导致双语判定失败。
+    _cjk_re = re.compile(r'[\u3400-\u9fff]')
+
+    def _is_cjk(s):
+        return bool(_cjk_re.search(s))
+
+    neat = [(i, p) for i, p in enumerate(paras) if p.strip() and not _is_credit_line(p)]
+    if neat:
+        c_cnt = sum(1 for _, p in neat if _is_cjk(p))
+        l_cnt = len(neat) - c_cnt
+        flags = ''.join('C' if _is_cjk(p) else 'L' for _, p in neat)
+        transitions = sum(1 for i in range(1, len(flags)) if flags[i] != flags[i - 1])
+        # 同时含中英、严格交替（相邻几乎都不同语言）、且首段为中文 → 判定为双语交错
+        if c_cnt > 0 and l_cnt > 0 and transitions >= len(flags) - 2 and flags[0] == 'C':
+            gap = 3000
+            n = 0
+            pending_cjk = None
+            for _, p in neat:
+                if _is_cjk(p):
+                    if pending_cjk is not None:
+                        # 异常：上一个中文没跟到英文，先单独成条
+                        items.append({
+                            'index': 0,
+                            'start': ms_to_time(n * gap),
+                            'end': ms_to_time((n + 1) * gap),
+                            'source': pending_cjk,
+                            'target': '',
+                        })
+                        n += 1
+                    pending_cjk = p
+                else:
+                    if pending_cjk is not None:
+                        items.append({
+                            'index': 0,
+                            'start': ms_to_time(n * gap),
+                            'end': ms_to_time((n + 1) * gap),
+                            'source': pending_cjk,
+                            'target': p,
+                        })
+                        n += 1
+                        pending_cjk = None
+                    else:
+                        items.append({
+                            'index': 0,
+                            'start': ms_to_time(n * gap),
+                            'end': ms_to_time((n + 1) * gap),
+                            'source': '',
+                            'target': p,
+                        })
+                        n += 1
+            if pending_cjk is not None:
+                items.append({
+                    'index': 0,
+                    'start': ms_to_time(n * gap),
+                    'end': ms_to_time((n + 1) * gap),
+                    'source': pending_cjk,
+                    'target': '',
+                })
+                n += 1
+            return _normalize_docx_items(items)
 
     # 无时间码：每个非空段落作为一条原文，顺序给占位时码（每行 3 秒）；
     # 顺带剔除「人物名 + 职务」署名行
@@ -467,7 +585,7 @@ def _parse_docx(path):
             'target': '',
         })
         n += 1
-    return items
+    return _normalize_docx_items(items)
 
 
 # --------------------------------------------------------------------------

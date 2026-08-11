@@ -49,7 +49,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
   let editingEl = null;      // 当前处于编辑态的富文本单元格（双击进入，单击其它行退出）
   let editingSide = null;    // 'source' | 'target'
   let editingIndex = -1;
-  let syncSplit = true;      // 断句是否「原文/译文同步拆行」：true=同步，false=只拆当前编辑单元格
+  let syncSplit = false;     // 断句是否「原文/译文同步拆行」：true=同步，false=只拆当前编辑单元格（默认不勾选）
 
   // SRT 时间码 -> 毫秒
   function timeToMs(t) {

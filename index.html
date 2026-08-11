@@ -42,33 +42,30 @@
         <button id="saveCaret" class="caret" title="更多保存选项" aria-haspopup="true" aria-expanded="false">▾</button>
         <div class="dropdown-menu" id="saveMenu" hidden>
           <button class="dropdown-item" data-action="saveAs">项目另存为…</button>
-        </div>
-      </div>
-      <div class="dropdown" id="exportSourceDropdown">
-        <button id="exportSourceBtn" class="drop-toggle" title="导出原文：纯文本 / SRT / WebVTT">导出原文</button>
-        <button id="exportSourceCaret" class="caret" title="选择导出格式" aria-haspopup="true" aria-expanded="false">▾</button>
-        <div class="dropdown-menu" id="exportSourceMenu" hidden>
-          <button class="dropdown-item" data-format="txt">纯文本格式（*.txt）</button>
-          <button class="dropdown-item" data-format="srt">SRT格式（*.srt）</button>
-          <button class="dropdown-item" data-format="vtt">WebVTT格式（*.vtt）</button>
-        </div>
-      </div>
-      <div class="dropdown" id="exportTargetDropdown">
-        <button id="exportTargetBtn" class="drop-toggle" title="导出译文：纯文本 / SRT / WebVTT">导出译文</button>
-        <button id="exportTargetCaret" class="caret" title="选择导出格式" aria-haspopup="true" aria-expanded="false">▾</button>
-        <div class="dropdown-menu" id="exportTargetMenu" hidden>
-          <button class="dropdown-item" data-format="txt">纯文本格式（*.txt）</button>
-          <button class="dropdown-item" data-format="srt">SRT格式（*.srt）</button>
-          <button class="dropdown-item" data-format="vtt">WebVTT格式（*.vtt）</button>
-        </div>
-      </div>
-      <div class="dropdown" id="exportAllDropdown">
-        <button id="exportAllBtn" class="drop-toggle" title="导出全部（原文 + 译文）：纯文本 / SRT / WebVTT">导出全部</button>
-        <button id="exportAllCaret" class="caret" title="选择导出格式" aria-haspopup="true" aria-expanded="false">▾</button>
-        <div class="dropdown-menu" id="exportAllMenu" hidden>
-          <button class="dropdown-item" data-format="txt">纯文本格式（*.txt）</button>
-          <button class="dropdown-item" data-format="srt">SRT格式（*.srt）</button>
-          <button class="dropdown-item" data-format="vtt">WebVTT格式（*.vtt）</button>
+          <div class="submenu-item">
+            <div class="submenu-label">导出原文 <span class="sub-caret">▸</span></div>
+            <div class="submenu">
+              <button class="dropdown-item" data-export="source" data-format="txt">纯文本格式（*.txt）</button>
+              <button class="dropdown-item" data-export="source" data-format="srt">SRT格式（*.srt）</button>
+              <button class="dropdown-item" data-export="source" data-format="vtt">WebVTT格式（*.vtt）</button>
+            </div>
+          </div>
+          <div class="submenu-item">
+            <div class="submenu-label">导出译文 <span class="sub-caret">▸</span></div>
+            <div class="submenu">
+              <button class="dropdown-item" data-export="target" data-format="txt">纯文本格式（*.txt）</button>
+              <button class="dropdown-item" data-export="target" data-format="srt">SRT格式（*.srt）</button>
+              <button class="dropdown-item" data-export="target" data-format="vtt">WebVTT格式（*.vtt）</button>
+            </div>
+          </div>
+          <div class="submenu-item">
+            <div class="submenu-label">导出全部 <span class="sub-caret">▸</span></div>
+            <div class="submenu">
+              <button class="dropdown-item" data-export="bilingual" data-format="txt">纯文本格式（*.txt）</button>
+              <button class="dropdown-item" data-export="bilingual" data-format="srt">SRT格式（*.srt）</button>
+              <button class="dropdown-item" data-export="bilingual" data-format="vtt">WebVTT格式（*.vtt）</button>
+            </div>
+          </div>
         </div>
       </div>
       <button id="swapSides" title="把左列（原文）与右列（译文）内容互换">文本互换</button>
@@ -131,7 +128,7 @@
             <button id="insertRow" title="在选中行之后插入空白字幕行（Ins）">插入</button>
             <button id="deleteRows" title="删除选中的字幕行（Del，删除前会确认）">删除</button>
             <label class="sync-split-ctl" title="选中后断句时原文与译文同步拆行；不选中则只拆分当前编辑的单元格（按下方单元格内容决定新建一行，还是填入下方空单元格）">
-              <input type="checkbox" id="syncSplit" checked />
+              <input type="checkbox" id="syncSplit" />
               同步断句
             </label>
           </span>
