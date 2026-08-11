@@ -427,6 +427,37 @@ button.primary:hover {
   color: var(--muted);
 }
 
+/* 字数上限控制（原文 / 译文 文字长度阈值输入框） */
+.len-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+.len-input {
+  width: 46px;
+  padding: 3px 4px;
+  font-size: 12px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.len-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 单元格文字超长（超过字数上限）标红提醒 */
+.source-line.over-limit,
+.target-line.over-limit {
+  color: #e5484d;
+}
+
 /* 查找 / 替换栏 */
 .findbar {
   display: flex;

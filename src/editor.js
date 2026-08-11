@@ -219,6 +219,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     tbody.innerHTML = '';
     items.forEach((it, i) => tbody.appendChild(makeRow(i, it)));
     highlightSelection();
+    paintLengthFlags();
   }
 
   // 依据 selected / activeIndex 刷新行的选中态：所有 selected 行加 .selected，
@@ -594,6 +595,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       await new Promise((r) => setTimeout(r, 0));
     }
     highlightSelection();
+    paintLengthFlags();
     return total;
   }
   function getItems() {
@@ -608,6 +610,29 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     syncSplit = !!val;
   }
 
+  // 字数上限：原文列 / 译文列允许的纯文字长度（0 = 不限制）。
+  // 超过上限的单元格文字标红，提醒用户该条字幕过密。
+  let srcLimit = 0;
+  let tgtLimit = 0;
+
+  // 设置上限并立即重绘所有行的超长标记（在互换 / 限数改变 / 内容变更后调用）。
+  function setLengthLimits(s, t) {
+    srcLimit = Math.max(0, s | 0);
+    tgtLimit = Math.max(0, t | 0);
+    paintLengthFlags();
+  }
+
+  // 依据当前上限遍历所有行，给超长的 source/target 单元格加 / 去 over-limit 标记（CSS 变红）。
+  function paintLengthFlags() {
+    if (!tbody) return;
+    for (const tr of tbody.children) {
+      const sEl = tr.querySelector('.source-line');
+      const tEl = tr.querySelector('.target-line');
+      if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && sEl.textContent.length > srcLimit);
+      if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && tEl.textContent.length > tgtLimit);
+    }
+  }
+
   // 翻译回填后刷新目标列
   function applyTargets() {
     items.forEach((it, i) => {
@@ -619,6 +644,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
         autoGrow(el);
       }
     });
+    paintLengthFlags();
   }
 
   // 用于查找替换的批量 setSource
@@ -631,6 +657,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     if (el) {
       el.innerHTML = val;
       autoGrow(el);
+      paintLengthFlags();
     }
   }
 
@@ -749,6 +776,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
         autoGrow(tEl);
       }
     });
+    paintLengthFlags();
   }
 
   // 字体格式：对当前聚焦单元格里的选区应用 加粗/斜体/下划线。
@@ -767,5 +795,5 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     return true;
   }
 
-  return { setItems, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit };
+  return { setItems, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit, setLengthLimits };
 }

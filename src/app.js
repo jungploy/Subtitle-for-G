@@ -868,6 +868,17 @@ $('swapSides').addEventListener('click', () => {
   flushPendingEdit();
   const before = deepClone(items);
   editor.swapSides();
+  // 两列内容互换后，字数上限阈值也要同步交换，否则「原文列限制」会错配到译文列，
+  // 导致超长标红提醒错位。
+  const sEl = $('srcLenLimit');
+  const tEl = $('tgtLenLimit');
+  const tmp = srcLenLimit;
+  srcLenLimit = tgtLenLimit;
+  tgtLenLimit = tmp;
+  if (sEl) sEl.value = String(srcLenLimit);
+  if (tEl) tEl.value = String(tgtLenLimit);
+  editor.setLengthLimits(srcLenLimit, tgtLenLimit);
+  saveConfig({ lengthLimits: { source: srcLenLimit, target: tgtLenLimit } });
   dirty = true;
   schedulePushBuffer();
   pushHistory('文本互换', before, '原文 ↔ 译文 两列内容互换');
@@ -1443,6 +1454,9 @@ wireFormatBtn('fmtUnderline', 'underline');
 // 程序配置：窗口大小 / 表格间距 / 文件打开位置 / 翻译引擎 由 Python 端读写 config.json
 // --------------------------------------------------------------------------
 let cellPad = 4;
+// 字数上限：原文列 / 译文列允许的纯文字长度（0 = 不限制），超长单元格标红。
+let srcLenLimit = 0;
+let tgtLenLimit = 0;
 
 function applyCellPadding(pad) {
   cellPad = Math.max(0, Math.min(20, pad | 0));
@@ -1479,6 +1493,18 @@ async function loadConfig() {
     if (typeof cfg?.ediusFps === 'number') {
       ediusFpsDefault = cfg.ediusFps;
     }
+    // 字数上限：原文 / 译文列文字长度阈值（0 = 不限制）
+    if (cfg?.lengthLimits) {
+      const s = Math.max(0, parseInt(cfg.lengthLimits.source, 10) || 0);
+      const t = Math.max(0, parseInt(cfg.lengthLimits.target, 10) || 0);
+      srcLenLimit = s;
+      tgtLenLimit = t;
+      const sEl = $('srcLenLimit');
+      const tEl = $('tgtLenLimit');
+      if (sEl) sEl.value = String(s);
+      if (tEl) tEl.value = String(t);
+      editor.setLengthLimits(s, t);
+    }
   } catch (e) {
     /* 忽略：使用默认值 */
   }
@@ -1493,6 +1519,20 @@ $('padPlus').addEventListener('click', () => {
   applyCellPadding(cellPad + 1);
   saveConfig({ table: { cell_padding: cellPad } });
 });
+
+// 字数上限输入框：改变后即时套用并重绘超长标红，并记忆到配置。
+function applyLenLimits() {
+  const sEl = $('srcLenLimit');
+  const tEl = $('tgtLenLimit');
+  srcLenLimit = Math.max(0, parseInt((sEl && sEl.value) || '0', 10) || 0);
+  tgtLenLimit = Math.max(0, parseInt((tEl && tEl.value) || '0', 10) || 0);
+  if (sEl) sEl.value = String(srcLenLimit);
+  if (tEl) tEl.value = String(tgtLenLimit);
+  editor.setLengthLimits(srcLenLimit, tgtLenLimit);
+  saveConfig({ lengthLimits: { source: srcLenLimit, target: tgtLenLimit } });
+}
+if ($('srcLenLimit')) $('srcLenLimit').addEventListener('change', applyLenLimits);
+if ($('tgtLenLimit')) $('tgtLenLimit').addEventListener('change', applyLenLimits);
 
 // 翻译引擎变更时记录
 $('provider').addEventListener('change', () => {
