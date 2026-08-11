@@ -385,12 +385,47 @@ def _normalize_cjk_punct(text):
     return out
 
 
+# 中文文本里要「去除」的标点字符集（显式列出，避免误伤富文本标签 < > / 等）。
+# 保留：双引号 “” (U+201C/U+201D) 与书名号 《》 (U+300A/U+300B)；以及标签字符 < > / 。
+# 即：删除中文文本里的【一切标点】（中文全角标点 + ASCII 标点），只留 “” 《》 与标签字符。
+# 刻意排除 300A/300B(《》)、201C/201D(“”)、空格 3000，以及所有字母/数字/CJK 表意/emoji/标签字符。
+_CN_STRIP_RE = re.compile(
+    "[\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65"
+    "\u3001\u3002\u3008\u3009\u300C-\u301B\u301C\u301D-\u301F\u3030"
+    "\u2013-\u2015\u2018\u2019\u201B\u2025\u2026\u00B7"
+    "!\x22#$%&'()*+,.:;=?@^_{|}~-]"
+)
+
+
+def _collapse_spaces(text):
+    # 合并连续空白为单个 ASCII 空格：ASCII 空格、全角空格(　)、制表符。
+    if not text:
+        return text
+    return re.sub(r'[ 　\t]+', ' ', text)
+
+
+def _strip_chinese_punct(text):
+    if not text:
+        return text
+    return _CN_STRIP_RE.sub('', text)
+
+
 def _normalize_docx_items(items):
     for it in items:
         for key in ('source', 'target'):
             val = it.get(key) or ''
-            if val and not _looks_chinese(val):
-                it[key] = _normalize_cjk_punct(val)
+            if not val:
+                continue
+            # 1) 合并连续空格为单个（所有文本）
+            val = _collapse_spaces(val)
+            # 2) 中文文本：去除中文标点（保留 “” 《》）；非中文：全角标点转 ASCII
+            if _looks_chinese(val):
+                val = _strip_chinese_punct(val)
+            else:
+                val = _normalize_cjk_punct(val)
+            # 3) 去除标点后可能留下多余空格，再合并一次并收尾 trim
+            val = _collapse_spaces(val).strip()
+            it[key] = val
     return items
 
 

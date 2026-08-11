@@ -5,7 +5,7 @@ import { createEditor } from './editor.js';
 import { translateLines, translateDocument, normalizeTranslationLine, alignSegments } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
 import { plainText, renderRich, replaceRich } from './rich.js';
-import { normalizeNonChinese } from './textnorm.js';
+import { normalizeImportText } from './textnorm.js';
 
 // 编辑会话快照：进入单元格编辑（focus）时记下修改前的整表状态，
 // 失焦（blur）时若确有改动则生成一条「编辑」修改记录；离散操作（互换/替换/翻译）
@@ -323,8 +323,8 @@ function parseLinesToItems(text) {
       target = line.slice(sep + 2);
     }
     // 非中文文本的中文全角标点归一化为英文标点（中文原文保持不变）
-    source = normalizeNonChinese(source);
-    target = normalizeNonChinese(target);
+    source = normalizeImportText(source);
+    target = normalizeImportText(target);
     items.push({
       index: 0,
       start: msToTimeJs(n * GAP),
