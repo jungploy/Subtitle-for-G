@@ -131,16 +131,18 @@
               <input type="checkbox" id="syncSplit" />
               同步断句
             </label>
+          </span>
+          <span class="toolbar-right">
+            <label class="pad-ctl">间距
+              <button id="padMinus" type="button" title="减小间距">−</button>
+              <span id="padVal">4</span>
+              <button id="padPlus" type="button" title="增大间距">+</button>
+            </label>
             <span class="len-group">
               <label class="len-ctl" title="原文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">原文<input type="number" id="srcLenLimit" class="len-input" min="0" step="1" value="0" /></label>
               <label class="len-ctl" title="译文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">译文<input type="number" id="tgtLenLimit" class="len-input" min="0" step="1" value="0" /></label>
             </span>
           </span>
-          <label class="pad-ctl">间距
-            <button id="padMinus" type="button" title="减小间距">−</button>
-            <span id="padVal">4</span>
-            <button id="padPlus" type="button" title="增大间距">+</button>
-          </label>
         </div>
         <div id="editorMount"></div>
       </div>

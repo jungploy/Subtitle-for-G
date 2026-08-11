@@ -408,7 +408,15 @@ button.primary:hover {
   font-size: 12px;
 }
 
+.toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .pad-ctl {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
 }
 
@@ -437,8 +445,8 @@ button.primary:hover {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  font-size: 14px;
-  color: var(--muted);
+  font-size: inherit;
+  color: inherit;
 }
 .len-input {
   width: 48px;
