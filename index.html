@@ -127,12 +127,12 @@
             <span class="toolbar-sep" aria-hidden="true"></span>
             <button id="insertRow" title="在选中行之后插入空白字幕行（Ins）">插入</button>
             <button id="deleteRows" title="删除选中的字幕行（Del，删除前会确认）">删除</button>
+          </span>
+          <span class="toolbar-right">
             <label class="sync-split-ctl" title="选中后断句时原文与译文同步拆行；不选中则只拆分当前编辑的单元格（按下方单元格内容决定新建一行，还是填入下方空单元格）">
               <input type="checkbox" id="syncSplit" />
               同步断句
             </label>
-          </span>
-          <span class="toolbar-right">
             <span class="len-group">
               <label class="len-ctl" title="原文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">原文<input type="number" id="srcLenLimit" class="len-input" min="0" step="1" value="0" /></label>
               <label class="len-ctl" title="译文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">译文<input type="number" id="tgtLenLimit" class="len-input" min="0" step="1" value="0" /></label>

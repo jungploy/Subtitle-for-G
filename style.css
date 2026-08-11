@@ -115,21 +115,22 @@ body {
   vertical-align: middle;
 }
 
-/* 表格工具条右侧分组：字数控制 + 间距，紧挨在一起（不随 space-between 被推散） */
+/* 表格工具条右侧分组：同步断句 + 字数控制 + 间距，紧挨在一起（不随 space-between 被推散） */
 .toolbar-right {
   display: inline-flex;
   align-items: center;
   gap: 12px;
+  font-size: 14px;
+  color: var(--text);
 }
 
-/* 表格工具条「同步断句」开关（删除按钮之后） */
+/* 表格工具条「同步断句」开关（右侧分组内，字号/颜色与字数控制统一） */
 .sync-split-ctl {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: 2px;
-  font-size: 13px;
-  color: var(--text);
+  font-size: inherit;
+  color: inherit;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
