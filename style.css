@@ -408,12 +408,6 @@ button.primary:hover {
   font-size: 12px;
 }
 
-.toolbar-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .pad-ctl {
   display: inline-flex;
   align-items: center;
