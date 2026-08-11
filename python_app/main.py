@@ -624,6 +624,24 @@ def _parse_docx(path):
 
 
 # --------------------------------------------------------------------------
+# 文本读取：按 BOM / 编码自动解码
+# --------------------------------------------------------------------------
+def _read_text_auto(path):
+    """读取文本文件并按编码自动解码，避免 EDIUS 等以 UTF-16 保存的字幕被
+    utf-8 误读成乱码。优先级：UTF-16(BOM) > UTF-8-SIG(BOM) > UTF-8 > GB18030。"""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        return raw.decode('utf-16', errors='ignore')
+    if raw[:3] == b'\xef\xbb\xbf':
+        return raw.decode('utf-8-sig', errors='ignore')
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return raw.decode('gb18030', errors='ignore')
+
+
+# --------------------------------------------------------------------------
 # 暴露给前端的 JS API
 # --------------------------------------------------------------------------
 class Api:
@@ -684,8 +702,7 @@ class Api:
         if not result:
             return None
         path = result[0] if isinstance(result, (list, tuple)) else result
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            text = f.read()
+        text = _read_text_auto(path)
         # 记录本次打开所在目录，下次打开/另存默认定位到这里
         cfg = _load_config()
         cfg['last_dir'] = os.path.dirname(path)
@@ -767,8 +784,7 @@ class Api:
         if not result:
             return None
         path = result[0] if isinstance(result, (list, tuple)) else result
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            text = f.read()
+        text = _read_text_auto(path)
         cfg = _load_config()
         cfg['last_dir'] = os.path.dirname(path)
         _save_config(cfg)

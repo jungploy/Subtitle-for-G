@@ -1,6 +1,7 @@
 // src/app.js
 import { parseSRT } from './srt.js';
 import { parseAss } from './ass.js';
+import { parseEdius, isEdius } from './edius.js';
 import { createEditor } from './editor.js';
 import { translateLines, translateDocument, normalizeTranslationLine, alignSegments } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
@@ -378,11 +379,19 @@ function hideLoading() {
 }
 
 async function loadText(text) {
-  // 自动识别 ASS（Advanced SubStation Alpha）：含 [Script Info] / [Events] 段落与
-  // Dialogue: 行即视为 ASS，否则走 SRT / 字幕通用解析。
+  // 自动识别字幕格式：
+  //   1) EDIUS（HH:MM:SS:FF 起始 结束 文本，常见于 EDIUS 导出的 .txt）
+  //   2) ASS（Advanced SubStation Alpha）：含 [Script Info] / [Events] 与 Dialogue: 行
+  //   3) 其余走 SRT / 字幕通用解析
   await showLoading('正在解析字幕…');
-  const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
-  const { items, bilingual } = isAss ? parseAss(text) : parseSRT(text);
+  let result;
+  if (isEdius(text)) {
+    result = parseEdius(text);
+  } else {
+    const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
+    result = isAss ? parseAss(text) : parseSRT(text);
+  }
+  const { items, bilingual } = result;
   const htmlItems = items.map((it) => ({
     ...it,
     source: toHtml(it.source),
@@ -417,9 +426,15 @@ $('fileInput').addEventListener('change', async (e) => {
   }
   if (f.name.toLowerCase().endsWith('.txt')) {
     currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
-    const items = parseLinesToItems(text);
-    const bil = items.some((it) => it.target && it.target.trim());
-    applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
+    // 带时间码的 EDIUS 格式 .txt 也走 loadText（自动识别）；否则按无时码纯文本处理
+    if (isEdius(text)) {
+      const r = await loadText(text);
+      setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+    } else {
+      const items = parseLinesToItems(text);
+      const bil = items.some((it) => it.target && it.target.trim());
+      applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
+    }
     return;
   }
   currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
