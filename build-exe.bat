@@ -22,15 +22,24 @@ REM 4) 把前端拷进 python_app\dist，供 PyInstaller 一并打包
 if not exist python_app\dist mkdir python_app\dist
 xcopy /E /I /Y dist\* python_app\dist\
 
+REM 4.5) 版本号 +1（写入 python_app\_version.py 与 version_info.txt）
+REM      version.json 的 build 段即累计构建次数；prefix 段（如 0.1.0）需人工改动，
+REM      改 prefix 不清零 build。详见 scripts\bump_build.py。
+python scripts\bump_build.py
+
 REM 5) 用 PyInstaller 打单文件可执行（--windowed 无控制台窗口）
 REM    --collect-submodules webview 确保把 pywebview 的 edgechromium 平台模块一并打进包，
 REM    否则打包后的 exe 在 Windows 上会报 ImportError / 无法创建窗口。
+REM    --version-file 把版本号写入 exe 文件属性（资源管理器右键→属性→详细信息）。
 pyinstaller --noconfirm --onefile --windowed ^
   --name Subtitle-for-G ^
-  --distpath build_exe --workpath build_tmp ^
+  --distpath build_exe --workpath "%TEMP%\sub_build_tmp" ^
   --hidden-import webview ^
   --collect-submodules webview ^
+  --hidden-import _version ^
   --add-data "python_app\dist;dist" ^
+  --icon assets/icon.ico ^
+  --version-file version_info.txt ^
   python_app\main.py
 
 echo.

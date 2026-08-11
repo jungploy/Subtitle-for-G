@@ -13,6 +13,8 @@ import os
 import sys
 import json
 import copy
+import re
+import ctypes
 import threading
 import urllib.parse
 import urllib.request
@@ -20,6 +22,116 @@ import http.server
 import socketserver
 
 import webview
+
+
+# --------------------------------------------------------------------------
+# 单实例：用 Windows 命名互斥体保证同一时刻只运行一个程序。
+# 互斥体句柄全程持有（不关闭），进程退出时由系统自动释放；
+# 若已存在同名互斥体（另一个实例在运行），不弹窗、不启动第二个窗口，
+# 而是把已存在的那个窗口恢复（若最小化）并提到最前台。
+# --------------------------------------------------------------------------
+_MUTEX_HANDLE = None
+
+
+def ensure_single_instance():
+    """返回 True 表示这是第一个实例；False 表示已有实例在运行。"""
+    global _MUTEX_HANDLE
+    kernel32 = ctypes.windll.kernel32
+    _MUTEX_HANDLE = kernel32.CreateMutexW(None, False, 'SubtitleForG_SingleInstance')
+    if not _MUTEX_HANDLE:
+        return False
+    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        _MUTEX_HANDLE = None
+        return False
+    return True
+
+
+def _activate_existing_window():
+    """已有实例在运行时：把那个已存在的窗口恢复（若最小化）并提到最前台，
+    而不是弹窗。找不到（极小概率的启动竞态）就静默退出。"""
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    SW_RESTORE = 9
+    HWND_TOPMOST = -1
+    HWND_NOTOPMOST = -2
+    SWP_NOMOVE = 0x0001
+    SWP_NOSIZE = 0x0002
+    PREFIX = 'Subtitle-for-G'
+
+    # 设置必要参数类型，避免 64 位下 HWND 被当作 32 位 int 截断
+    user32.EnumWindows.argtypes = [
+        ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p),
+        ctypes.c_void_p,
+    ]
+    user32.EnumWindows.restype = ctypes.c_bool
+    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    user32.IsWindowVisible.restype = ctypes.c_bool
+    user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+    user32.SetWindowPos.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+    ]
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    user32.AttachThreadInput.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool]
+
+    found = [None]
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def enum_cb(hwnd, lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value or ''
+        if title.startswith(PREFIX):
+            found[0] = hwnd
+            return False  # 找到第一个匹配即停止枚举
+        return True
+
+    # 窗口可能尚未创建（极小概率的双开竞态），最多重试 5 秒
+    for _ in range(50):
+        found[0] = None
+        user32.EnumWindows(enum_cb, 0)
+        if found[0]:
+            break
+        kernel32.Sleep(100)
+    hwnd = found[0]
+    if not hwnd:
+        return False
+
+    # 1) 若被最小化，先还原为正常/最大化窗口
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    # 2) 用 AttachThreadInput 临时把本线程挂到目标窗口线程，绕过前台锁，
+    #    再把窗口提到最前；失败（返回 0）也不影响后续尝试
+    cur_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+    try:
+        user32.AttachThreadInput(cur_thread, target_thread, True)
+    except Exception:
+        pass
+    user32.SetForegroundWindow(hwnd)
+    # 3) topmost 乒乓：先置顶再取消置顶，进一步确保窗口可见且不被遮挡
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    try:
+        user32.AttachThreadInput(cur_thread, target_thread, False)
+    except Exception:
+        pass
+    return True
+
+try:
+    from _version import VERSION
+except ImportError:
+    VERSION = '0.0.0.0'
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # PyInstaller 打包后资源在 sys._MEIPASS 下；开发期用仓库内的 dist
@@ -107,7 +219,21 @@ def _mymemory(text, source, target):
     url = 'https://api.mymemory.translated.net/get?' + q
     with urllib.request.urlopen(url, timeout=20) as r:
         data = json.loads(r.read().decode('utf-8'))
-    return data.get('responseData', {}).get('translatedText', '')
+    rd = data.get('responseData')
+    if isinstance(rd, dict):
+        txt = rd.get('translatedText', '') or ''
+        # MyMemory 超配额 / 出错时，会把错误文本塞进 translatedText（形如 "MYMEMORY WARNING: ..."），
+        # 此时应作为异常抛出，让前端明确提示，而不是静默返回空（表现为「翻译不出来」）。
+        if txt and 'MYMEMORY' in txt.upper() and 'WARNING' in txt.upper():
+            raise RuntimeError(txt)
+        return txt
+    if isinstance(rd, str):
+        return rd
+    # 错误有时放在 responseMessage / responseDetails
+    msg = data.get('responseMessage') or data.get('responseDetails') or ''
+    if msg and msg.strip().upper() not in ('OK', ''):
+        raise RuntimeError(msg)
+    raise RuntimeError('MyMemory 未返回译文（可能已超每日免费额度）')
 
 
 def _openai(lines, api_key, model, source, target):
@@ -180,9 +306,184 @@ def _run_on_ui(fn):
 
 
 # --------------------------------------------------------------------------
+# 纯标准库解析 Word 文档（.docx），智能识别时间码并分组文本
+# --------------------------------------------------------------------------
+def _srt_to_ms(tc):
+    m = re.match(r'^(\d{1,2}):(\d{2}):(\d{2}),(\d{3})$', tc)
+    if not m:
+        return 0
+    h, mm, s, ms = (int(m.group(i)) for i in range(1, 5))
+    return ((h * 60 + mm) * 60 + s) * 1000 + ms
+
+
+def _mmss_to_ms(tc):
+    """把 MM:SS（纪录片片段标记，如 00:46 / 02:35）转换为毫秒。"""
+    m = re.match(r'^\s*(\d{1,2}):(\d{2})\s*$', tc)
+    if not m:
+        return 0
+    mm, ss = int(m.group(1)), int(m.group(2))
+    return (mm * 60 + ss) * 1000
+
+
+# 署名行：全大写人名（允许重音大写 À-Ý、空格、撇号、间隔号 ·、连字符）+ 逗号或句号 + 职务。
+# 例：CONCEPCIÓ PEIG, Researcher in Architectural… / MANUEL ARENAS. Architect
+# 用于纪录片脚本 docx：每个片段末尾那行「人物名 + 职务」不是台词，应剔除。
+_CREDIT_RE = re.compile(
+    r'^[A-Z\u00c0-\u00dd][A-Z\u00c0-\u00dd \'\u00b7-]* '
+    r'[A-Z\u00c0-\u00dd \'\u00b7-]*[.,]\s+[A-Za-z]'
+)
+
+
+def _is_credit_line(line):
+    s = (line or '').strip()
+    if not s or len(s) > 90:
+        return False
+    return bool(_CREDIT_RE.match(s))
+
+
+def _parse_docx(path):
+    """解析 .docx：提取段落文本，识别时间码行（H:MM:SS:FF / H:MM:SS,mmm 等），
+    把相邻时间码之间的文本聚合成一条字幕；无时间码则按非空段落逐行导入。
+    返回 [{index,start,end,source,target}]，时间码为 SRT 格式 HH:MM:SS,mmm。
+    """
+    import zipfile
+    import re
+    from xml.etree import ElementTree as ET
+
+    W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    root = ET.fromstring(xml)
+    body = root.find(f'{{{W}}}body')
+    if body is None:
+        body = root
+    paras = []
+    for p in body.iter(f'{{{W}}}p'):
+        texts = [t.text or '' for t in p.iter(f'{{{W}}}t')]
+        paras.append(''.join(texts))
+
+    # 时间码：H:MM:SS:FF（最后一节 2 位=帧，3 位=毫秒），分隔符允许 :., 
+    tc_re = re.compile(r'^\s*(\d{1,2})[:.,](\d{2})[:.,](\d{2})[:.,](\d{1,3})\s*$')
+    # 片段标记：MM:SS（纪录片脚本常见，如 00:46 / 02:35），仅 2 节、分隔符为冒号
+    mmss_re = re.compile(r'^\s*(\d{1,2}):(\d{2})\s*$')
+
+    tc_idx = []
+    max_frame = 0
+    for idx, p in enumerate(paras):
+        m = tc_re.match(p.strip())
+        if m:
+            tc_idx.append(idx)
+            if len(m.group(4)) == 2:  # 帧（2 位）
+                max_frame = max(max_frame, int(m.group(4)))
+
+    mmss_idx = [idx for idx, p in enumerate(paras) if mmss_re.match(p.strip())]
+
+    # 帧率推断：出现 >=25 的帧值 → 30fps，否则 25fps（PAL 常见）
+    fps = 30 if max_frame >= 25 else 25
+
+    def tc_to_srt(tc):
+        m = tc_re.match(tc.strip())
+        h, mm, s, last = m.group(1), m.group(2), m.group(3), m.group(4)
+        if len(last) == 3:
+            ms = int(last)
+        else:
+            ms = int(round(int(last) / fps * 1000))
+        return f'{int(h):02d}:{int(mm):02d}:{int(s):02d},{ms:03d}'
+
+    def ms_to_time(ms):
+        total = max(0, int(ms))
+        h = total // 3600000
+        m = (total % 3600000) // 60000
+        s = (total % 60000) // 1000
+        return f'{h:02d}:{m:02d}:{s:02d},{total % 1000:03d}'
+
+    items = []
+    if tc_idx:
+        # 有时间码（SRT 风格）：相邻时间码之间（跳过空行）的文本聚合为一条；
+        # 若该时间码之后没有文本（仅作上一条的结束标记），则不单独成条。
+        for k in range(len(tc_idx)):
+            start_pos = tc_idx[k]
+            end_pos = tc_idx[k + 1] if k + 1 < len(tc_idx) else len(paras)
+            text_lines = [paras[j] for j in range(start_pos + 1, end_pos) if paras[j].strip()]
+            if not text_lines:
+                continue
+            text = '\n'.join(text_lines)
+            start_srt = tc_to_srt(paras[start_pos])
+            if k + 1 < len(tc_idx):
+                end_srt = tc_to_srt(paras[tc_idx[k + 1]])
+            else:
+                end_srt = ms_to_time(_srt_to_ms(start_srt) + 3000)
+            items.append({
+                'index': 0,
+                'start': start_srt,
+                'end': end_srt,
+                'source': text,
+                'target': '',
+            })
+        return items
+
+    if mmss_idx and len(mmss_idx) >= 2:
+        # 仅带 MM:SS 片段标记（纪录片脚本常见，如 00:46 / 02:35）：
+        # 把相邻两个标记之间的所有段落合并为一条字幕；标记作为开始时间，
+        # 下一个标记作为结束时间；仅作结束标记、其后无文本的不单独成条；
+        # 最后一个片段给默认 30 秒时长。标记倒序（结束早于开始）时同样兜底 30 秒。
+        for k in range(len(mmss_idx)):
+            start_pos = mmss_idx[k]
+            end_pos = mmss_idx[k + 1] if k + 1 < len(mmss_idx) else len(paras)
+            # 剔除片段末尾的「人物名 + 职务」署名行，只保留对白/旁白正文
+            text_lines = [paras[j] for j in range(start_pos + 1, end_pos)
+                          if paras[j].strip() and not _is_credit_line(paras[j])]
+            if not text_lines:
+                continue
+            text = '\n'.join(text_lines)
+            start_ms = _mmss_to_ms(paras[start_pos])
+            if k + 1 < len(mmss_idx):
+                end_ms = _mmss_to_ms(paras[mmss_idx[k + 1]])
+                if end_ms <= start_ms:
+                    end_ms = start_ms + 30000
+            else:
+                end_ms = start_ms + 30000
+            items.append({
+                'index': 0,
+                'start': ms_to_time(start_ms),
+                'end': ms_to_time(end_ms),
+                'source': text,
+                'target': '',
+            })
+        return items
+
+    # 无时间码：每个非空段落作为一条原文，顺序给占位时码（每行 3 秒）；
+    # 顺带剔除「人物名 + 职务」署名行
+    gap = 3000
+    n = 0
+    for p in paras:
+        if not p.strip() or _is_credit_line(p):
+            continue
+        items.append({
+            'index': 0,
+            'start': ms_to_time(n * gap),
+            'end': ms_to_time((n + 1) * gap),
+            'source': p,
+            'target': '',
+        })
+        n += 1
+    return items
+
+
+# --------------------------------------------------------------------------
 # 暴露给前端的 JS API
 # --------------------------------------------------------------------------
 class Api:
+    def __init__(self):
+        # 工程缓冲：前端在导入 / 编辑 / 保存后把当前工程内容推过来，
+        # 供「关闭时询问是否保存」使用。
+        self._project_path = None
+        self._project_xml = ''
+        self._project_dirty = False
+
+    def get_version(self):
+        return VERSION
+
     def get_config(self):
         return _load_config()
 
@@ -223,7 +524,7 @@ class Api:
                 webview.OPEN_DIALOG,
                 directory=init_dir,
                 allow_multiple=False,
-                file_types=('字幕文件 (*.srt)', '所有文件 (*.*)'),
+                file_types=('字幕文件 (*.srt;*.ass;*.vtt;*.txt)', '所有文件 (*.*)'),
             )
         _run_on_ui(_show)
         result = holder.get('res')
@@ -260,6 +561,94 @@ class Api:
         cfg['last_dir'] = os.path.dirname(path)
         _save_config(cfg)
         return path
+
+    def save_export(self, default_name, contents):
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+        ext = os.path.splitext(default_name)[1].lower() or '.txt'
+        if ext == '.srt':
+            label = 'SubRip 字幕 (*.srt)'
+        elif ext in ('.vtt',):
+            label = 'WebVTT 字幕 (*.vtt)'
+        elif ext in ('.txt',):
+            label = '纯文本 (*.txt)'
+        else:
+            label = '所有文件 (*.*)'
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=init_dir,
+                save_filename=default_name,
+                file_types=(label, '所有文件 (*.*)'),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        # 若用户未手动改扩展名，确保落盘文件带正确后缀
+        if not path.lower().endswith(ext):
+            path += ext
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(contents)
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return path
+
+    def import_text(self):
+        """导入纯文本文件：仅返回文本内容，由前端把每一行当成一条原文。"""
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=init_dir,
+                allow_multiple=False,
+                file_types=('纯文本 (*.txt)', '所有文件 (*.*)'),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return {'path': path, 'text': text}
+
+    def import_docx(self):
+        """智能导入其他文档（.docx）：自动识别时间码行并分组文本。
+        纯标准库解析（zipfile + xml），无需第三方依赖。
+        返回 {path, items:[{index,start,end,source,target}]}，时间码为 SRT 格式。
+        """
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=init_dir,
+                allow_multiple=False,
+                file_types=('文档 (*.docx)', '所有文件 (*.*)'),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        try:
+            items = _parse_docx(path)
+        except Exception as e:
+            return {'path': path, 'error': str(e), 'items': []}
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return {'path': path, 'items': items}
 
     def open_project(self):
         win = webview.windows[0]
@@ -311,8 +700,61 @@ class Api:
         _save_config(cfg)
         return path
 
+    def save_project_to_path(self, path, contents):
+        # 直接覆盖已存在的工程文件（不弹对话框）。由前端「保存项目」按钮在
+        # currentProjectPath 已知（已打开过 .gsub）时调用，实现快速保存。
+        if not path:
+            return None
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(contents)
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return path
+
+    def set_project_buffer(self, path, contents, dirty):
+        # 前端在导入 / 编辑 / 保存后把当前工程内容推过来，供「关闭时询问是否保存」使用。
+        self._project_path = path or None
+        self._project_xml = contents or ''
+        self._project_dirty = bool(dirty)
+
+    def _save_current_project(self):
+        # 在 FormClosing（UI 线程）内调用，直接把当前工程缓冲写盘。
+        # 已知路径则覆盖保存；否则弹出「另存为」对话框。
+        # 返回 True 表示已保存 / 无需保存；返回 False 表示用户取消了保存（调用方应取消关闭）。
+        win = webview.windows[0]
+        xml = self._project_xml or ''
+        if not xml:
+            return True
+        if self._project_path:
+            self.save_project_to_path(self._project_path, xml)
+            return True
+        # 没有已知路径：弹出另存为对话框（当前线程即 UI 线程，ShowDialog 安全）
+        init_dir = _load_config().get('last_dir') or ''
+        res = win.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory=init_dir,
+            save_filename='未命名项目.gsub',
+            file_types=('字幕项目 (*.gsub)', '所有文件 (*.*)'),
+        )
+        if not res:
+            return False
+        path = res[0] if isinstance(res, (list, tuple)) else res
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(xml)
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        self._project_path = path
+        return True
+
 
 if __name__ == '__main__':
+    # 单实例：已有实例在运行时，把已存在的窗口恢复并提到前台，不启动第二个窗口
+    if not ensure_single_instance():
+        _activate_existing_window()
+        sys.exit(0)
+
     threading.Thread(target=_serve, daemon=True).start()
     api = Api()
     cfg = _load_config()
@@ -332,7 +774,7 @@ if __name__ == '__main__':
         create_kwargs['y'] = int(win_y)
 
     window = webview.create_window(
-        'Subtitle-for-G - 字幕双语编辑器',
+        f'Subtitle-for-G {VERSION} - 字幕双语编辑器',
         f'http://127.0.0.1:{PORT}',
         **create_kwargs,
     )
@@ -399,5 +841,49 @@ if __name__ == '__main__':
 
     if cfg['window'].get('maximized'):
         window.events.loaded += lambda: window.maximize()
+
+    def _install_close_guard():
+        # 在真实 WinForms 窗体上挂 FormClosing：edgechromium(WebView2) 后端并未订阅
+        # window.events.closing，必须直接挂 FormClosing 才能拦截关闭。窗体在
+        # webview.start() 内才创建，故用后台线程轮询至窗体就绪再挂。
+        def _poll():
+            try:
+                from System.Windows.Forms import (
+                    Application, MessageBox, MessageBoxButtons, MessageBoxIcon, DialogResult,
+                )
+            except Exception:
+                return
+            try:
+                while Application.OpenForms.Count == 0:
+                    threading.Event().wait(0.2)
+                form = Application.OpenForms[0]
+
+                def _handler(sender, args):
+                    _persist_geometry()
+                    if not api._project_dirty:
+                        return
+                    try:
+                        res = MessageBox.Show(
+                            '字幕尚未保存，是否将当前内容保存为项目？',
+                            '保存项目',
+                            MessageBoxButtons.YesNoCancel,
+                            MessageBoxIcon.Question,
+                        )
+                    except Exception:
+                        return
+                    if res == DialogResult.Yes:
+                        if not api._save_current_project():
+                            args.Cancel = True
+                    elif res == DialogResult.Cancel:
+                        args.Cancel = True
+                    # DialogResult.No → 直接关闭，不保存
+
+                form.FormClosing += _handler
+            except Exception:
+                pass
+
+        threading.Thread(target=_poll, daemon=True).start()
+
+    _install_close_guard()
 
     webview.start()

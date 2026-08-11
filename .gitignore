@@ -18,5 +18,19 @@ python_app/dist/
 build_exe/
 build_tmp/
 *.spec
+# 自动生成的版本文件（由 scripts/bump_build.py 构建时写入，不应提交）
+python_app/_version.py
+version_info.txt
+build_log*.txt
 # 运行时用户配置（窗口大小/表格间距/文件位置等，不应提交）
 config.json
+
+# 清理/临时保留目录（不应提交）
+_trash_*/
+_trash_build_leftovers/
+build_tmp_old_*/
+python_app/_old_dist_*/
+
+# 开发/测试临时脚本
+editor_check.mjs
+scripts/test_*.mjs

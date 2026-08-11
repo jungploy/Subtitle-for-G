@@ -1,18 +1,66 @@
 // src/app.js
 import { parseSRT } from './srt.js';
+import { parseAss } from './ass.js';
 import { createEditor } from './editor.js';
-import { translateLines } from './translate.js';
+import { translateLines, translateDocument, normalizeTranslationLine, alignSegments } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
-import { plainText, renderRich } from './rich.js';
+import { plainText, renderRich, replaceRich } from './rich.js';
+
+// 编辑会话快照：进入单元格编辑（focus）时记下修改前的整表状态，
+// 失焦（blur）时若确有改动则生成一条「编辑」修改记录；离散操作（互换/替换/翻译）
+// 开始前也会先 flush 掉进行中的编辑会话，避免重复记录。
+let pendingEdit = null;
 
 const editor = createEditor(document.getElementById('editorMount'), {
   onChange: () => {
     dirty = true;
+    schedulePushBuffer();
+    if (pendingEdit) pendingEdit.modified = true;
+    updateSelectionStats();
+  },
+  onActiveChange: () => updateSelectionStats(),
+  onEditBegin: (meta) => {
+    pendingEdit = { before: deepClone(editor.getItems()), meta, modified: false };
+  },
+  onEditCommit: () => flushPendingEdit(),
+  onStructuralChange: (label, before) => {
+    pushHistory(label, deepClone(before), label);
   },
 });
 let dirty = false;
 // 当前打开的源文件路径（用于保存项目时写进 meta；浏览器环境下仅保留文件名）
 let currentSourcePath = '';
+// 当前工程文件（.gsub）的完整路径；保存按钮在有此路径时直接覆盖，关闭时据此自动保存
+let currentProjectPath = null;
+
+// 生成当前工程的 .gsub XML 字符串（供保存 / 关闭自动保存复用）
+function getProjectXml() {
+  const items = editor.getItems();
+  const hasTarget = items.some((it) => (it.target || '').trim().length);
+  return serializeProject(items, {
+    sourcePath: currentSourcePath,
+    bilingual: hasTarget,
+    created: new Date().toISOString(),
+  });
+}
+
+// 把当前工程最新内容推给 Python 端，供「关闭时询问是否保存」使用。
+// dirty 标记自上次保存/打开以来是否改动过（Python 端据此判断是否弹保存提示）。
+function pushProjectBuffer() {
+  if (!isPyWebView()) return;
+  try {
+    window.pywebview.api.set_project_buffer(currentProjectPath, getProjectXml(), dirty);
+  } catch (e) {
+    /* 忽略：推送失败不影响手动保存 */
+  }
+}
+
+// 编辑后防抖推送（~800ms），保证关闭时 Python 端持有较新的内容
+let _bufferTimer = null;
+function schedulePushBuffer() {
+  if (_bufferTimer) clearTimeout(_bufferTimer);
+  _bufferTimer = setTimeout(pushProjectBuffer, 800);
+}
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $('statusMsg');
@@ -31,10 +79,209 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+// 状态栏全文翻译进度条：percent 为 0~100 的数字；label 可选，会同步写进状态文字。
+// indeterminate=true 时显示「不确定（跑动）」动画——用于整篇翻译（无真实百分比）。
+const progressEl = $('statusProgress');
+const progressFill = $('statusProgressFill');
+const progressText = $('statusProgressText');
+
+function showProgress(percent, label, indeterminate) {
+  if (!progressEl) return;
+  progressEl.hidden = false;
+  if (indeterminate) {
+    progressEl.classList.add('indeterminate');
+    if (progressText) progressText.textContent = '…';
+  } else {
+    progressEl.classList.remove('indeterminate');
+    const p = Math.max(0, Math.min(100, Math.round(percent)));
+    if (progressFill) progressFill.style.width = p + '%';
+    if (progressText) progressText.textContent = p + '%';
+  }
+  if (label != null && statusEl) statusEl.textContent = label;
+}
+
+function hideProgress() {
+  if (!progressEl) return;
+  progressEl.hidden = true;
+  progressEl.classList.remove('indeterminate');
+  if (progressFill) progressFill.style.width = '0%';
+  if (progressText) progressText.textContent = '0%';
+}
+
 // 状态栏右侧统计：字幕总行数
 function updateStats() {
   const items = editor.getItems() || [];
   statsEl.textContent = `共 ${items.length} 条`;
+}
+
+// 深拷贝 / 相等判断（用于修改记录快照对比）
+function deepClone(x) {
+  return JSON.parse(JSON.stringify(x));
+}
+function itemsEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// 计算一段「显示用 HTML」的纯文字长度（去掉标签与换行，只数可见字符）
+function textLength(html) {
+  return plainText(html || '').replace(/\r?\n/g, '').length;
+}
+
+// 底部状态栏：选中行的原文 / 译文文字长度
+const selEl = $('statusSel');
+function updateSelectionStats() {
+  if (!selEl) return;
+  const sel = editor.getSelectedIndices();
+  if (!sel.length) {
+    selEl.textContent = '未选中行';
+    return;
+  }
+  if (sel.length === 1) {
+    const ai = sel[0];
+    const it = (editor.getItems() || [])[ai];
+    if (!it) {
+      selEl.textContent = '未选中行';
+      return;
+    }
+    selEl.textContent = `选中 第${ai + 1}行 · 原文 ${textLength(it.source)} · 译文 ${textLength(it.target)}`;
+  } else {
+    selEl.textContent = `已选中 ${sel.length} 行`;
+  }
+}
+
+// --------------------------------------------------------------------------
+// 修改记录（历史）：始终保持最近 HISTORY_MAX 条（滑动窗口，超出则丢弃最旧的一条）；
+// 点击某条可「回滚」到该次修改之前，回滚后该条及其后续记录变灰，再次点击灰条可「重做」到那一步。
+// 每条记录同时保存 before（修改前快照）与 after（修改后快照）。
+// historyPoint = 当前已应用的修改条数（0 表示初始状态，即尚未应用任何修改）。
+// --------------------------------------------------------------------------
+const HISTORY_MAX = 30;
+let history = [];
+let historyPoint = 0;
+
+// 把一段文字截断到 maxlen，超出加省略号（用于修改记录第二行展示具体改动）
+function trunc(s, maxlen) {
+  s = (s || '').replace(/\s+/g, ' ').trim();
+  return s.length > maxlen ? s.slice(0, maxlen) + '…' : s;
+}
+
+// 在离散操作（互换/替换/翻译）开始前调用：把进行中的单元格编辑会话结算掉，
+// 防止随后 DOM 重建引发的 blur 再次生成重复记录。
+function flushPendingEdit() {
+  if (pendingEdit && pendingEdit.modified) {
+    const after = editor.getItems();
+    if (!itemsEqual(pendingEdit.before, after)) {
+      const m = pendingEdit.meta || { index: 0, side: 'source' };
+      const i = m.index ?? 0;
+      const side = m.side === 'source' ? '原文' : '译文';
+      const oldV = plainText(pendingEdit.before[i]?.[m.side] || '');
+      const newV = plainText(after[i]?.[m.side] || '');
+      const detail = `第${i + 1}行 ${side}：${trunc(oldV, 16)} → ${trunc(newV, 16)}`;
+      pushHistory(`编辑 第${i + 1}行 ${side}`, pendingEdit.before, detail);
+    }
+  }
+  pendingEdit = null;
+}
+
+// 新增一条修改记录（before = 修改前快照；after 在调用此刻从编辑器读取；
+// detail = 第二行要展示的具体修改内容，如「旧 → 新」「查找 → 替换」等）
+function pushHistory(label, before, detail) {
+  // 若处于「已撤销」分支，新的修改会截断其后的（未来）记录
+  if (historyPoint < history.length) {
+    history.length = historyPoint;
+  }
+  const after = deepClone(editor.getItems());
+  history.push({ label, ts: Date.now(), before: deepClone(before), after, detail: detail || '' });
+  historyPoint = history.length; // 指向最新一条之后
+  // 超出上限：丢弃最旧的一条，始终保持「最近 HISTORY_MAX 条」的滑动窗口
+  if (history.length > HISTORY_MAX) {
+    history.shift();
+    historyPoint -= 1;
+  }
+  renderHistory();
+}
+
+// 跳转到第 e 次修改（1-based）：e <= historyPoint 为「撤销」，否则为「重做」
+function goTo(e) {
+  const k = e - 1;
+  if (k < 0 || k >= history.length) return;
+  if (e <= historyPoint) {
+    editor.setItems(deepClone(history[k].before));
+    historyPoint = e - 1;
+    setStatus(`已回滚到「${history[k].label}」之前`);
+  } else {
+    editor.setItems(deepClone(history[k].after));
+    historyPoint = e;
+    setStatus(`已重做到「${history[k].label}」之后`);
+  }
+  dirty = true;
+  schedulePushBuffer();
+  updateStats();
+  updateSelectionStats();
+  renderHistory();
+}
+
+// 撤销一步：回退到上一条修改之前（与点击该条历史记录等价）
+function undo() {
+  if (historyPoint > 0) goTo(historyPoint);
+}
+// 重做一步：前进到下一条修改之后
+function redo() {
+  if (historyPoint < history.length) goTo(historyPoint + 1);
+}
+
+// 维护撤销/重做按钮的可用状态（无可撤销/重做时禁用）
+function updateUndoRedo() {
+  const u = $('undoBtn');
+  const r = $('redoBtn');
+  if (u) u.disabled = historyPoint <= 0;
+  if (r) r.disabled = historyPoint >= history.length;
+}
+
+// 清空修改记录（一般在打开 / 加载新工程时调用，避免旧快照指向不同内容）
+function clearHistory() {
+  history = [];
+  historyPoint = 0;
+  renderHistory();
+}
+
+// 渲染右侧修改记录列表（从上到下：最早 → 最新）。
+// 已应用的记录正常显示；撤销后的「未来」记录变灰，点击即重做。
+function renderHistory() {
+  const ul = $('historyList');
+  if (!ul) return;
+  ul.innerHTML = '';
+  if (!history.length) {
+    const li = document.createElement('li');
+    li.className = 'history-empty';
+    li.textContent = '暂无修改记录';
+    ul.appendChild(li);
+    return;
+  }
+  for (let i = 0; i < history.length; i++) {
+    const e = i + 1;
+    const rec = history[i];
+    const t = new Date(rec.ts);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    const future = e > historyPoint;
+    const li = document.createElement('li');
+    li.className = 'history-item' + (future ? ' history-future' : '');
+    li.title = future
+      ? `点击重做到「${rec.label}」之后`
+      : `点击回滚到「${rec.label}」之前`;
+    li.innerHTML =
+      `<div class="h-main">` +
+        `<span class="h-idx">${e}</span>` +
+        `<span class="h-label">${escapeHtml(rec.label)}</span>` +
+        `<span class="h-time">${hh}:${mm}:${ss}</span>` +
+      `</div>` +
+      `<div class="h-detail">${escapeHtml(rec.detail || '')}</div>`;
+    li.addEventListener('click', () => goTo(e));
+    ul.appendChild(li);
+  }
+  updateUndoRedo();
 }
 
 // 把模型中存储的文本统一规范为「显示用 HTML」：
@@ -46,16 +293,96 @@ function toHtml(s) {
   return s;
 }
 
+// 毫秒 -> SRT 时间码（前端版，与 editor.js 的 msToTime 等价）
+function msToTimeJs(ms) {
+  const total = Math.max(0, Math.floor(ms));
+  const h = Math.floor(total / 3600000);
+  const m = Math.floor((total % 3600000) / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  const mills = total % 1000;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(mills).padStart(3, '0')}`;
+}
+
+// 把「纯文本（一行一条）」解析为字幕条目：每行作为一条原文，顺序给占位时码（每行 3 秒）。
+function parseLinesToItems(text) {
+  const lines = String(text).split(/\r?\n/);
+  const items = [];
+  const GAP = 3000;
+  let n = 0;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    items.push({
+      index: 0,
+      start: msToTimeJs(n * GAP),
+      end: msToTimeJs((n + 1) * GAP),
+      source: line,
+      target: '',
+    });
+    n += 1;
+  }
+  return items;
+}
+
+// 把后端返回的「原始条目（source/target 为纯文本，可能含 \n）」套上 HTML 后载入编辑器。
+async function applyImportedItems(rawItems, msg) {
+  const items = (rawItems || []).map((it) => ({
+    index: 0,
+    start: it.start || '',
+    end: it.end || '',
+    source: toHtml(it.source || ''),
+    target: toHtml(it.target || ''),
+  }));
+  await showLoading('正在导入…');
+  await editor.setItemsAsync(items, setLoadingProgress);
+  updateStats();
+  clearHistory();
+  updateSelectionStats();
+  dirty = true;
+  pushProjectBuffer();
+  hideLoading();
+  setStatus(msg);
+}
+
+// —— 加载进度遮罩 ——
+// 大文件（上千条字幕）导入时一次性建表会卡顿数秒，先用遮罩 + 进度条给出可见反馈。
+function showLoading(title) {
+  const ov = $('loadingOverlay');
+  if (title) $('loadingText').textContent = title;
+  $('loadingProgressFill').style.width = '0%';
+  $('loadingProgressLabel').textContent = '0%';
+  ov.hidden = false;
+  // 让出一帧，确保遮罩在重活开始前先绘制出来（否则可能看不到）
+  return new Promise((r) => requestAnimationFrame(() => r()));
+}
+function setLoadingProgress(done, total) {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
+  $('loadingProgressFill').style.width = pct + '%';
+  $('loadingProgressLabel').textContent = pct + '%';
+}
+function hideLoading() {
+  $('loadingOverlay').hidden = true;
+}
+
 async function loadText(text) {
-  const { items, bilingual } = parseSRT(text);
+  // 自动识别 ASS（Advanced SubStation Alpha）：含 [Script Info] / [Events] 段落与
+  // Dialogue: 行即视为 ASS，否则走 SRT / 字幕通用解析。
+  await showLoading('正在解析字幕…');
+  const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
+  const { items, bilingual } = isAss ? parseAss(text) : parseSRT(text);
   const htmlItems = items.map((it) => ({
     ...it,
     source: toHtml(it.source),
     target: toHtml(it.target),
   }));
-  editor.setItems(htmlItems);
+  // 分块建表并回报进度，避免大文件卡死
+  await editor.setItemsAsync(htmlItems, setLoadingProgress);
   updateStats();
-  dirty = false;
+  clearHistory();
+  updateSelectionStats();
+  dirty = true;
+  pushProjectBuffer();
+  hideLoading();
   return { count: items.length, bilingual };
 }
 
@@ -75,6 +402,12 @@ $('fileInput').addEventListener('change', async (e) => {
     openProjectFromText(text, f.name);
     return;
   }
+  if (f.name.toLowerCase().endsWith('.txt')) {
+    currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
+    const items = parseLinesToItems(text);
+    applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → 原文）`);
+    return;
+  }
   currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
   const r = await loadText(text);
   setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
@@ -88,7 +421,7 @@ function openSrt() {
       return (async () => {
         const path = await window.__TAURI__.dialog.open({
           multiple: false,
-          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'txt'] }],
+          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'ass', 'txt'] }],
         });
         if (!path) return;
         const text = await window.__TAURI__.core.invoke('read_file', { path });
@@ -116,6 +449,44 @@ function openSrt() {
   }
 }
 
+// 导入纯文本文件：每行作为一条原文（pywebview 走 Python 原生对话框；其余回退 fileInput）。
+function importTxt() {
+  if (isPyWebView()) {
+    try {
+      return (async () => {
+        const r = await window.pywebview.api.import_text();
+        if (!r) return;
+        currentSourcePath = r.path || '';
+        const items = parseLinesToItems(r.text);
+        await applyImportedItems(items, `已导入文本：${r.path}（${items.length} 条 → 原文）`);
+      })().catch((e) => setStatus('导入失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('导入失败：' + (e?.message || e));
+    }
+  } else {
+    $('fileInput').click();
+  }
+}
+
+// 智能导入 Word 文档：pywebview 走 Python 端解析（自动识别时间码），其余环境暂不支持。
+function importDocx() {
+  if (isPyWebView()) {
+    try {
+      return (async () => {
+        const r = await window.pywebview.api.import_docx();
+        if (!r) return;
+        if (r.error) { setStatus('Word 导入失败：' + r.error); return; }
+        currentSourcePath = r.path || '';
+        await applyImportedItems(r.items || [], `已智能导入：${r.path}（${r.items ? r.items.length : 0} 条，已自动识别时间码）`);
+      })().catch((e) => setStatus('导入失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('导入失败：' + (e?.message || e));
+    }
+  } else {
+    setStatus('Word 智能导入仅桌面版（.exe）支持');
+  }
+}
+
 // 下载导出（浏览器回退）
 function download(filename, text) {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -132,8 +503,22 @@ function download(filename, text) {
 // --------------------------------------------------------------------------
 const PROJECT_DEFAULT_NAME = 'subtitle_project.gsub';
 
+// 另存为时的默认文件名：若当前是从某个 SRT/字幕文件打开的（currentSourcePath 非空、
+// 且尚未归属某个工程文件 currentProjectPath），则用该文件名（去扩展名）同名存为 .gsub；
+// 否则回退到通用默认名。这样「打开 movie.srt → 第一次保存工程」默认就叫 movie.gsub。
+function defaultProjectName() {
+  if (currentSourcePath) {
+    const base = currentSourcePath.split(/[\\/]/).pop() || '';
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const name = (stem || 'subtitle_project') + '.gsub';
+    return name;
+  }
+  return PROJECT_DEFAULT_NAME;
+}
+
 // 用项目文本载入编辑器（被「打开项目」按钮与 .gsub 文件拖入/选择复用）
-function openProjectFromText(text, name) {
+async function openProjectFromText(text, name, path) {
   try {
     const { items, meta } = parseProject(text);
     if (!items.length) {
@@ -147,12 +532,20 @@ function openProjectFromText(text, name) {
       source: toHtml(it.source),
       target: toHtml(it.target),
     }));
-    editor.setItems(htmlItems);
+    await showLoading('正在打开项目…');
+    await editor.setItemsAsync(htmlItems, setLoadingProgress);
     updateStats();
+    clearHistory();
+    updateSelectionStats();
     dirty = false;
+    // 记录当前工程路径：来自「打开项目」对话框时 path 已知，可支持「直接保存 / 关闭自动保存」
+    currentProjectPath = path || null;
     if (meta.sourcePath) currentSourcePath = meta.sourcePath;
+    pushProjectBuffer();
+    hideLoading();
     setStatus(`已打开项目：${name}（${items.length} 条）`);
   } catch (e) {
+    hideLoading();
     setStatus('项目解析失败：' + (e.message || e));
   }
 }
@@ -178,7 +571,7 @@ function openProject() {
       return (async () => {
         const r = await window.pywebview.api.open_project();
         if (!r) return;
-        openProjectFromText(r.text, r.path);
+        openProjectFromText(r.text, r.path, r.path);
       })().catch((e) => setStatus('打开项目失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开项目失败：' + (e?.message || e));
@@ -189,36 +582,48 @@ function openProject() {
 }
 
 // 保存项目：把当前所有字幕（时间码/原文/译文）与元数据写成 .gsub（XML）
+// - 有明确工程路径（currentProjectPath）→ 直接覆盖该文件（快速保存，不弹对话框）；
+// - 否则回退到「另存为」弹窗选择文件名。
 async function saveProject() {
   const items = editor.getItems();
   if (!items.length) {
     setStatus('没有可保存的内容');
     return;
   }
-  const hasTarget = items.some((it) => (it.target || '').trim().length);
-  const xml = serializeProject(items, {
-    sourcePath: currentSourcePath,
-    bilingual: hasTarget,
-    created: new Date().toISOString(),
-  });
+  const xml = getProjectXml();
 
   if (isTauri()) {
     try {
-      const path = await window.__TAURI__.dialog.save({
-        defaultPath: PROJECT_DEFAULT_NAME,
-        filters: [{ name: '字幕项目', extensions: ['gsub'] }],
-      });
-      if (!path) return;
-      await window.__TAURI__.core.invoke('write_file', { path, contents: xml });
-      setStatus(`项目已保存到：${path}`);
+      if (currentProjectPath) {
+        await window.__TAURI__.core.invoke('write_file', {
+          path: currentProjectPath,
+          contents: xml,
+        });
+        dirty = false;
+        pushProjectBuffer();
+        setStatus(`项目已保存到：${currentProjectPath}`);
+      } else {
+        await saveProjectAs();
+      }
     } catch (e) {
       setStatus('保存项目失败：' + (e?.message || e));
     }
   } else if (isPyWebView()) {
     try {
-      const path = await window.pywebview.api.save_project(PROJECT_DEFAULT_NAME, xml);
-      if (!path) return;
-      setStatus(`项目已保存到：${path}`);
+      if (currentProjectPath) {
+        // 直接保存到当前工程文件，不弹对话框
+        try {
+          const path = await window.pywebview.api.save_project_to_path(currentProjectPath, xml);
+          dirty = false;
+          pushProjectBuffer();
+          setStatus(`项目已保存到：${path}`);
+        } catch (e) {
+          // 直接保存失败（如路径非法/无写权限）→ 回退到「另存为」让用户重选
+          await saveProjectAs();
+        }
+      } else {
+        await saveProjectAs();
+      }
     } catch (e) {
       setStatus('保存项目失败：' + (e?.message || e));
     }
@@ -228,7 +633,198 @@ async function saveProject() {
   }
 }
 
+// 另存为：弹出保存对话框选择文件名，并把结果记为当前工程路径
+async function saveProjectAs() {
+  const items = editor.getItems();
+  if (!items.length) {
+    setStatus('没有可保存的内容');
+    return;
+  }
+  const xml = getProjectXml();
+
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.save({
+        defaultPath: defaultProjectName(),
+        filters: [{ name: '字幕项目', extensions: ['gsub'] }],
+      });
+      if (!path) return;
+      await window.__TAURI__.core.invoke('write_file', { path, contents: xml });
+      currentProjectPath = path;
+      dirty = false;
+      pushProjectBuffer();
+      setStatus(`项目已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存项目失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const path = await window.pywebview.api.save_project(defaultProjectName(), xml);
+      if (!path) return;
+      currentProjectPath = path;
+      dirty = false;
+      pushProjectBuffer();
+      setStatus(`项目已保存到：${path}`);
+    } catch (e) {
+      setStatus('保存项目失败：' + (e?.message || e));
+    }
+  } else {
+    download(defaultProjectName(), xml);
+    setStatus('已导出项目文件 .gsub');
+  }
+}
+
 $('saveProject').addEventListener('click', saveProject);
+
+// --------------------------------------------------------------------------
+// 导出字幕：纯文本 / SRT / VTT，可选 原文 / 译文 / 原文+译文（双行）
+// --------------------------------------------------------------------------
+// 取某条字幕在指定内容模式下要导出的纯文本行（已去标签，<br> 还原为换行；空行剔除）
+function exportLines(it, content) {
+  const s = plainText(it.source || '');
+  const t = plainText(it.target || '');
+  if (content === 'source') return [s].filter(Boolean);
+  if (content === 'target') return [t || s].filter(Boolean); // 译文为空时回退原文
+  const parts = []; // bilingual：原文 + 译文（双行）
+  if (s) parts.push(s);
+  if (t) parts.push(t);
+  return parts;
+}
+
+// 纯文本：每条之间空一行分隔
+function buildTxt(plain, content) {
+  const blocks = plain
+    .map((it) => exportLines(it, content).join('\n'))
+    .filter((b) => b.length);
+  return (blocks.length ? blocks.join('\n\n') + '\n' : '');
+}
+
+// SRT：序号 + 时间轴 + 内容块
+function buildSrt(plain, content) {
+  const cues = plain
+    .map((it, i) => {
+      const idx = it.index != null ? it.index : i + 1;
+      const body = exportLines(it, content).join('\n');
+      if (!body) return null;
+      return `${idx}\n${it.start || '00:00:00,000'} --> ${it.end || '00:00:00,000'}\n${body}`;
+    })
+    .filter(Boolean);
+  return (cues.length ? cues.join('\n\n') + '\n' : '');
+}
+
+// WebVTT：时间码逗号改点，前面加 WEBVTT 头
+function buildVtt(plain, content) {
+  const toVtt = (ts) => (ts || '00:00:00,000').replace(/,(\d{3})$/, '.$1');
+  const blocks = plain
+    .map((it) => {
+      const body = exportLines(it, content).join('\n');
+      if (!body) return null;
+      return `${toVtt(it.start)} --> ${toVtt(it.end)}\n${body}`;
+    })
+    .filter(Boolean);
+  return 'WEBVTT\n\n' + (blocks.length ? blocks.join('\n\n') + '\n' : '');
+}
+
+// 默认导出文件名：沿用当前源文件名（去扩展名），扩展名随格式变化；
+// content 决定尾部标签（_原文 / _译文 / _双语），避免三种导出互相覆盖。
+function exportDefaultName(format, content) {
+  const ext = format === 'txt' ? 'txt' : format === 'srt' ? 'srt' : 'vtt';
+  let base = 'subtitles';
+  if (currentSourcePath) {
+    const f = currentSourcePath.split(/[\\/]/).pop() || '';
+    const dot = f.lastIndexOf('.');
+    const stem = dot > 0 ? f.slice(0, dot) : f;
+    if (stem) base = stem;
+  }
+  const tag = content === 'source' ? '_原文'
+            : content === 'target' ? '_译文'
+            : content === 'bilingual' ? '_双语' : '';
+  return base + tag + '.' + ext;
+}
+
+// 生成导出文本；无内容返回 null（由调用方提示）
+function exportSubtitles(format, content) {
+  const items = editor.getItems();
+  if (!items.length) {
+    setStatus('没有可导出的内容');
+    return null;
+  }
+  const plain = items.map((it) => ({
+    index: it.index,
+    start: it.start || '00:00:00,000',
+    end: it.end || '00:00:00,000',
+    source: it.source || '',
+    target: it.target || '',
+  }));
+  if (format === 'txt') return buildTxt(plain, content);
+  if (format === 'vtt') return buildVtt(plain, content);
+  return buildSrt(plain, content);
+}
+
+// 直接导出（无弹窗）：按指定内容(content)与格式(format)生成文本并保存。
+// content ∈ {source 原文, target 译文, bilingual 原文+译文双行}；format ∈ {txt, srt, vtt}
+async function doExportDirect(content, format) {
+  const text = exportSubtitles(format, content);
+  if (text == null) return; // exportSubtitles 已提示「没有可导出的内容」
+  const filename = exportDefaultName(format, content);
+  if (isTauri()) {
+    try {
+      const path = await window.__TAURI__.dialog.save({
+        defaultPath: filename,
+        filters: [{ name: '导出文件', extensions: [format] }],
+      });
+      if (!path) return;
+      await window.__TAURI__.core.invoke('write_file', { path, contents: text });
+      setStatus(`已导出：${path}`);
+    } catch (e) {
+      setStatus('导出失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      const path = await window.pywebview.api.save_export(filename, text);
+      if (!path) return;
+      setStatus(`已导出：${path}`);
+    } catch (e) {
+      setStatus('导出失败：' + (e?.message || e));
+    }
+  } else {
+    download(filename, text);
+    setStatus('已导出文件（浏览器下载）');
+  }
+}
+
+// 绑定一个「导出」一级菜单（导出原文 / 导出译文 / 导出全部）：主按钮与 ▾ 都展开二级菜单，
+// 二级菜单的三项（纯文本 / SRT / WebVTT）点击后直接按对应格式导出。
+function wireExportMenu(dropdownId, content) {
+  const dd = $(dropdownId);
+  if (!dd) return;
+  const menu = dd.querySelector('.dropdown-menu');
+  const caret = dd.querySelector('.caret');
+  const main = dd.querySelector('.drop-toggle');
+  const toggle = (show) => {
+    const willShow = show === undefined ? menu.hidden : show;
+    menu.hidden = !willShow;
+    if (caret) caret.setAttribute('aria-expanded', String(willShow));
+  };
+  if (main) {
+    main.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  }
+  if (caret) {
+    caret.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  }
+  menu.querySelectorAll('.dropdown-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      toggle(false);
+      const fmt = item.dataset.format;
+      if (fmt) doExportDirect(content, fmt);
+    });
+  });
+}
+
+// 三个一级导出菜单：各自二级菜单为 纯文本 / SRT / WebVTT
+wireExportMenu('exportSourceDropdown', 'source');
+wireExportMenu('exportTargetDropdown', 'target');
+wireExportMenu('exportAllDropdown', 'bilingual');
 
 // 交换左右：把每一条的原文(source)与译文(target)原地互换（不重建 DOM，视图必刷新）
 $('swapSides').addEventListener('click', () => {
@@ -237,9 +833,125 @@ $('swapSides').addEventListener('click', () => {
     setStatus('没有可交换的内容');
     return;
   }
+  flushPendingEdit();
+  const before = deepClone(items);
   editor.swapSides();
   dirty = true;
+  schedulePushBuffer();
+  pushHistory('文本互换', before, '原文 ↔ 译文 两列内容互换');
   setStatus('已交换左右内容（原文 ↔ 译文）');
+});
+// --------------------------------------------------------------------------
+// 插入 / 删除字幕行：按钮点击 + Ins / Del 快捷键
+// --------------------------------------------------------------------------
+const confirmOverlay = $('confirmOverlay');
+
+// 通用确认弹窗，返回 Promise<boolean>（确定=true / 取消或 Esc=false）
+function confirmDialog(message) {
+  return new Promise((resolve) => {
+    const msg = $('confirmMsg');
+    const okBtn = $('confirmOk');
+    const cancelBtn = $('confirmCancel');
+    if (msg) msg.textContent = message;
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      confirmOverlay.hidden = true;
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      confirmOverlay.removeEventListener('keydown', onKey);
+      resolve(val);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    confirmOverlay.addEventListener('keydown', onKey);
+    confirmOverlay.hidden = false;
+    try { okBtn.focus(); } catch (e) {}
+  });
+}
+
+// 是否正有弹窗/面板打开（此时不响应 Ins/Del 行操作，避免误触）
+function anyModalOpen() {
+  const open = (id) => { const el = $(id); return el && !el.hidden; };
+  return open('confirmOverlay') || open('findBar') || open('translateBar');
+}
+
+// 单元格内是否正处于「选中了一段文字」的状态（用于让 Del 原生删除文字而非删行）
+function isTextSelectedInCell() {
+  const ae = document.activeElement;
+  if (ae && ae.isContentEditable) {
+    const sel = window.getSelection();
+    return !!(sel && !sel.isCollapsed && sel.toString().length > 0);
+  }
+  return false;
+}
+
+// 在选中行之后插入一行空白字幕（无选中行 / 列表为空时追加到末尾）
+function doInsert() {
+  const items = editor.getItems();
+  const a = editor.getActiveIndex();
+  const pos = a < 0 ? items.length : a + 1;
+  flushPendingEdit();
+  const before = deepClone(items);
+  editor.insertRow(pos);
+  dirty = true;
+  schedulePushBuffer();
+  pushHistory('插入行', before, `在第 ${pos + 1} 行插入空白字幕`);
+  updateStats();
+  updateSelectionStats();
+  setStatus('已插入空白字幕行');
+}
+
+// 删除选中的一行或多行（删除前弹窗确认；单行/多行都会提示）
+async function doDelete() {
+  const sel = editor.getSelectedIndices();
+  if (!sel.length) {
+    setStatus('请先选中要删除的字幕行（单击选中，或按住 Shift 点击选择多行）');
+    return;
+  }
+  const ok = await confirmDialog(
+    sel.length === 1 ? '确定删除选中的 1 行字幕吗？' : `确定删除选中的 ${sel.length} 行字幕吗？`
+  );
+  if (!ok) return;
+  flushPendingEdit();
+  const before = deepClone(editor.getItems());
+  editor.deleteRows(sel);
+  dirty = true;
+  schedulePushBuffer();
+  pushHistory(`删除 ${sel.length} 行`, before, `删除 ${sel.length} 行字幕`);
+  updateStats();
+  updateSelectionStats();
+  setStatus(`已删除 ${sel.length} 行字幕`);
+}
+
+$('insertRow').addEventListener('click', doInsert);
+$('deleteRows').addEventListener('click', doDelete);
+
+// Ins / Del 快捷键：插入 / 删除选中行。输入框内、或单元格已选中文字时不拦截，
+// 让原生文本编辑行为生效；没有任何行选中时也不拦截 Del，避免误吞其它删除。
+window.addEventListener('keydown', (e) => {
+  if (anyModalOpen()) return;
+  const ae = document.activeElement;
+  const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA');
+  const inCell = ae && ae.isContentEditable; // 正在单元格内编辑文字时不拦截，让原生文本编辑生效
+  if (e.key === 'Insert') {
+    if (inField || inCell || isTextSelectedInCell()) return;
+    e.preventDefault();
+    doInsert();
+  } else if (e.key === 'Delete') {
+    if (inField || inCell || isTextSelectedInCell()) return;
+    const sel = editor.getSelectedIndices();
+    if (!sel.length) return;
+    e.preventDefault();
+    doDelete();
+  }
 });
 // --------------------------------------------------------------------------
 // 全文查找 / 替换
@@ -370,7 +1082,7 @@ function gotoMatch(delta) {
   updateFindUI();
 }
 
-// 替换当前命中（逐处替换）
+// 替换当前命中（逐处替换）——标签感知：保留 <b>/<i>/<u>/<br>，仅替换可见文字
 function replaceCurrent() {
   const n = findState.matches.length;
   if (!n) {
@@ -380,15 +1092,27 @@ function replaceCurrent() {
   const m = findState.matches[findState.idx];
   const items = editor.getItems();
   const it = items[m.itemIndex];
-  const text = plainText(it[m.side] || '');
-  const repl = findReplace.value;
-  it[m.side] = text.slice(0, m.start) + repl + text.slice(m.end);
+  flushPendingEdit();
+  const before = deepClone(items);
+  const re = makeRegex(findQuery.value, true);
+  const { html } = replaceRich(it[m.side] || '', re, findReplace.value, {
+    start: m.start,
+    end: m.end,
+  });
+  it[m.side] = html;
   dirty = true;
+  schedulePushBuffer();
   editor.setItems(items); // 刷新左右两栏
+  const sideName = m.side === 'source' ? '原文' : '译文';
+  pushHistory(
+    `替换「${m.text}」`,
+    before,
+    `第${m.itemIndex + 1}行 ${sideName}：「${trunc(findQuery.value, 16)}」→「${trunc(findReplace.value, 16)}」`
+  );
   runSearch(false); // 重新扫描，idx 保持当前位置
 }
 
-// 全部替换（两边、所有命中）
+// 全部替换（两边、所有命中）——标签感知：保留格式，仅替换可见文字
 function replaceAll() {
   const q = findQuery.value;
   if (!q) return;
@@ -399,21 +1123,28 @@ function replaceAll() {
     setStatus('正则表达式无效：' + e.message);
     return;
   }
+  flushPendingEdit();
   const items = editor.getItems();
+  const before = deepClone(items);
   let count = 0;
   const repl = findReplace.value;
   items.forEach((it) => {
     ['source', 'target'].forEach((side) => {
-      const text = plainText(it[side] || '');
-      if (!text) return;
-      it[side] = text.replace(re, () => {
-        count++;
-        return repl;
-      });
+      const { html, count: c } = replaceRich(it[side] || '', re, repl);
+      if (c) {
+        it[side] = html;
+        count += c;
+      }
     });
   });
   dirty = true;
+  schedulePushBuffer();
   editor.setItems(items);
+  pushHistory(
+    `全部替换（${count} 处）`,
+    before,
+    `全文将「${trunc(q, 16)}」→「${trunc(repl, 16)}」，共 ${count} 处`
+  );
   editor.clearMatch();
   findState.matches = [];
   findState.idx = -1;
@@ -456,6 +1187,10 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// 关闭/隐藏页面时尽量把最新内容推给 Python（关闭自动保存的兜底；异步尽力而为）
+window.addEventListener('pagehide', () => pushProjectBuffer());
+window.addEventListener('beforeunload', () => pushProjectBuffer());
+
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
@@ -471,11 +1206,22 @@ window.addEventListener('drop', async (e) => {
   setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
+// 翻译面板（点击「翻译」按钮展开 / 收起，与查找替换一致）
+const translateBar = $('translateBar');
+function openTranslateBar() {
+  translateBar.hidden = false;
+  $('provider').focus();
+}
+function closeTranslateBar() {
+  translateBar.hidden = true;
+}
+
 // 翻译
 async function doTranslate(scope) {
   const provider = $('provider').value;
   const apiKey = $('apiKey').value.trim();
   const model = $('model').value.trim();
+  const whole = $('wholeDocMode').checked;
   const items = editor.getItems();
 
   if (provider === 'manual') {
@@ -491,32 +1237,159 @@ async function doTranslate(scope) {
     if (scope === 'selected') {
       const ai = editor.getActiveIndex();
       if (ai < 0) {
-        setStatus('请先点选一行再翻译选中行。');
+        setStatus('请先在表格里点选一行，再点「翻译选中行」。');
+        return;
+      }
+      const srcText = plainText(items[ai].source || '');
+      if (!srcText.trim()) {
+        setStatus(`第 ${ai + 1} 行原文为空，无需翻译。`);
         return;
       }
       setStatus(`正在翻译第 ${ai + 1} 行…`);
-      const [t] = await translateLines([plainText(items[ai].source)], { provider, apiKey, model }, setStatus);
-      items[ai].target = t;
+      flushPendingEdit();
+      const before = deepClone(items);
+      // 用 Array.isArray 兜底，避免翻译后端返回结构异常时解构报错
+      const res = await translateLines([srcText], { provider, apiKey, model }, setStatus);
+      const t = Array.isArray(res) ? res[0] : res;
+      const tgt = normalizeTranslationLine(t || '');
+      items[ai].target = tgt;
       editor.applyTargets();
-      setStatus(`已翻译第 ${ai + 1} 行`);
-    } else {
-      setStatus(`正在翻译全部 ${items.length} 条…`);
-      const translations = await translateLines(
-        items.map((it) => plainText(it.source)),
-        { provider, apiKey, model },
-        setStatus
+      dirty = true;
+      schedulePushBuffer();
+      updateSelectionStats();
+      pushHistory(
+        `翻译 第${ai + 1}行`,
+        before,
+        `第${ai + 1}行 原文「${trunc(srcText, 16)}」→ 译文「${trunc(tgt, 16)}」`
       );
-      translations.forEach((t, i) => (items[i].target = t));
+      setStatus(`已翻译第 ${ai + 1} 行`);
+    } else if (whole) {
+      // 整篇模式：把整篇原文作为一个请求发给引擎，保证全文人名/地名翻译一致。
+      // 代价：单次请求更长，免费引擎（MyMemory）易因超长/超额度而报错；
+      // 且无法给出真实百分比，进度条进入不确定（跑动）动画。
+      flushPendingEdit();
+      const before = deepClone(items);
+      const combined = items.map((it) => plainText(it.source || '')).join('\n');
+      setStatus('正在整篇翻译（保证人名/地名一致）…');
+      showProgress(0, '正在整篇翻译（保证人名/地名一致）…', true);
+      try {
+        const translated = await translateDocument(combined, { provider, apiKey, model }, setStatus);
+        const segs = alignSegments((translated || '').split('\n'), items.length);
+        const normalized = segs.map(normalizeTranslationLine);
+        items.forEach((it, i) => (it.target = normalized[i]));
+        editor.applyTargets();
+        dirty = true;
+        schedulePushBuffer();
+        updateSelectionStats();
+        pushHistory(
+          `整篇翻译全文（${items.length} 条）`,
+          before,
+          `整篇翻译 ${items.length} 条（${provider}）`
+        );
+        const okCount = normalized.filter((t) => t.trim()).length;
+        setStatus(`已整篇翻译 ${okCount}/${items.length} 条（${provider}）`);
+      } finally {
+        hideProgress();
+      }
+    } else {
+      // 逐行翻译：每行独立请求，既能真实反映「百分比进度」，也能避免把整篇
+      // 一次性发给 MyMemory 这类免费引擎时因超长/超额度而静默返回空（表现为「翻译不出来」）。
+      const total = items.length;
+      const sources = items.map((it) => plainText(it.source || ''));
+      const normalized = new Array(total).fill('');
+      let failed = 0;
+      let consecutiveFails = 0;
+      flushPendingEdit();
+      const before = deepClone(items);
+      showProgress(0, `正在全文翻译 0/${total}…`);
+      for (let i = 0; i < total; i++) {
+        const src = sources[i];
+        if (!src.trim()) {
+          showProgress(((i + 1) / total) * 100, `正在全文翻译 ${i + 1}/${total}…`);
+          continue;
+        }
+        let translated = '';
+        let ok = false;
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+          try {
+            const res = await translateLines([src], { provider, apiKey, model }, () => {});
+            translated = normalizeTranslationLine(Array.isArray(res) ? res[0] : res);
+            ok = true;
+          } catch (e) {
+            if (attempt === 1) {
+              failed += 1;
+              consecutiveFails += 1;
+              setStatus('翻译出错：' + (e && e.message ? e.message : String(e)));
+            }
+          }
+        }
+        if (ok) consecutiveFails = 0;
+        normalized[i] = translated || '';
+        // 网络引擎（MyMemory/OpenAI/DeepL）逐行请求较密，稍作间隔避免被限流
+        if (ok && (provider === 'mymemory' || provider === 'openai' || provider === 'deepl')) {
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        showProgress(((i + 1) / total) * 100, `正在全文翻译 ${i + 1}/${total}…`);
+        // 连续失败过多（多为 MyMemory 配额用尽 / 网络异常）：提前中止，保留已翻译的部分
+        if (consecutiveFails >= 5) {
+          setStatus(`翻译中断：连续 ${consecutiveFails} 条失败，疑似翻译引擎配额用尽或网络异常，已翻译部分已保留`);
+          break;
+        }
+      }
+      items.forEach((it, i) => (it.target = normalized[i]));
       editor.applyTargets();
-      setStatus(`已翻译全部 ${items.length} 条（${provider}）`);
+      dirty = true;
+      schedulePushBuffer();
+      updateSelectionStats();
+      pushHistory(
+        `翻译全文（${items.length} 条）`,
+        before,
+        `全文翻译 ${items.length} 条（${provider}）`
+      );
+      hideProgress();
+      const okCount = normalized.filter((t) => t.trim()).length;
+      setStatus(`已全文翻译 ${okCount}/${total} 条（${provider}）${failed ? `，${failed} 条失败` : ''}`);
     }
   } catch (e) {
-    // 错误已在 translateLines 内通过 onStatus 提示
+    // 任何异常都明确提示，不再静默吞掉（便于排查「翻译选中行出错」）
+    setStatus('翻译出错：' + (e && e.message ? e.message : String(e)));
   }
 }
 
 $('translateAll').addEventListener('click', () => doTranslate('all'));
 $('translateSelected').addEventListener('click', () => doTranslate('selected'));
+$('translateToggle').addEventListener('click', () =>
+  translateBar.hidden ? openTranslateBar() : closeTranslateBar()
+);
+$('translateClose').addEventListener('click', closeTranslateBar);
+
+// Esc 收起翻译面板（查找面板由自身输入框的 Esc 处理）
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !translateBar.hidden) {
+    closeTranslateBar();
+  }
+});
+
+// 撤销 / 重做：关联右侧修改记录（点一下 = 后退 / 前进一步修改记录）
+$('undoBtn').addEventListener('click', undo);
+$('redoBtn').addEventListener('click', redo);
+
+// 快捷键：Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Y（或 Ctrl/Cmd+Shift+Z）重做；
+// 但正在单元格内编辑文字时不拦截，让原生文本撤销/重做生效。
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k !== 'z' && k !== 'y') return;
+  const ae = document.activeElement;
+  if (ae && (ae.isContentEditable || ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+  if (k === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    undo();
+  } else if (k === 'y' || (k === 'z' && e.shiftKey)) {
+    e.preventDefault();
+    redo();
+  }
+});
 
 // --------------------------------------------------------------------------
 // 字体格式工具栏：选中单元格里的文字 -> 加粗 / 斜体 / 下划线
@@ -560,6 +1433,11 @@ async function loadConfig() {
   try {
     const cfg = await window.pywebview.api.get_config();
     if (cfg?.provider) $('provider').value = cfg.provider;
+    if (typeof cfg?.wholeDocMode === 'boolean') $('wholeDocMode').checked = cfg.wholeDocMode;
+    if (typeof cfg?.syncSplitMode === 'boolean') {
+      $('syncSplit').checked = cfg.syncSplitMode;
+      editor.setSyncSplit(cfg.syncSplitMode);
+    }
     if (typeof cfg?.table?.cell_padding === 'number') {
       applyCellPadding(cfg.table.cell_padding);
     }
@@ -581,6 +1459,17 @@ $('padPlus').addEventListener('click', () => {
 // 翻译引擎变更时记录
 $('provider').addEventListener('change', () => {
   saveConfig({ provider: $('provider').value });
+});
+
+// 「整篇翻译」开关变更时记录
+$('wholeDocMode').addEventListener('change', () => {
+  saveConfig({ wholeDocMode: $('wholeDocMode').checked });
+});
+
+// 「同步断句」开关变更时记录：控制断句时原文/译文是否同步拆行
+$('syncSplit').addEventListener('change', () => {
+  editor.setSyncSplit($('syncSplit').checked);
+  saveConfig({ syncSplitMode: $('syncSplit').checked });
 });
 
 // --------------------------------------------------------------------------
@@ -611,6 +1500,8 @@ openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
     toggleOpenMenu(false);
     const action = item.dataset.action;
     if (action === 'srt') openSrt();
+    else if (action === 'txt') importTxt();
+    else if (action === 'docx') importDocx();
     else openProject();
   });
 });
@@ -618,6 +1509,45 @@ openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
 // 点击页面其它位置关闭下拉菜单
 document.addEventListener('click', (e) => {
   if (!openDropdown.contains(e.target)) openMenu.hidden = true;
+  if (!saveDropdown.contains(e.target)) saveMenu.hidden = true;
+  // 点击页面其它位置关闭三个导出菜单
+  ['exportSourceDropdown', 'exportTargetDropdown', 'exportAllDropdown'].forEach((id) => {
+    const dd = $(id);
+    if (!dd) return;
+    if (!dd.contains(e.target)) {
+      const m = dd.querySelector('.dropdown-menu');
+      if (m) m.hidden = true;
+      const c = dd.querySelector('.caret');
+      if (c) c.setAttribute('aria-expanded', 'false');
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// 「保存」按钮下拉：主按钮直接保存到当前工程；下拉含「另存为…」
+// --------------------------------------------------------------------------
+const saveDropdown = $('saveDropdown');
+const saveMenu = $('saveMenu');
+const saveCaret = $('saveCaret');
+
+function toggleSaveMenu(show) {
+  const willShow = show === undefined ? saveMenu.hidden : show;
+  saveMenu.hidden = !willShow;
+  saveCaret.setAttribute('aria-expanded', String(willShow));
+}
+
+saveCaret.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleSaveMenu();
+});
+
+saveMenu.querySelectorAll('.dropdown-item').forEach((item) => {
+  item.addEventListener('click', () => {
+    toggleSaveMenu(false);
+    const action = item.dataset.action;
+    if (action === 'saveAs') saveProjectAs();
+    else saveProject();
+  });
 });
 
 // 首次自动加载示例，便于立即预览
@@ -628,6 +1558,25 @@ window.addEventListener('DOMContentLoaded', async () => {
   } catch (e) {
     /* 忽略：部分环境不支持该命令，不影响手动点击按钮（applyFormat 内也会再设一次） */
   }
+  // 应用已成功启动：关闭启动看门狗，避免误触发自动重载
+  window.__APP_BOOTED__ = true;
+  try { clearTimeout(window.__BOOT_WATCHDOG__); } catch (e) {}
+  try { sessionStorage.removeItem('sub_boot_retry'); } catch (e) {}
+
+  // 显示程序版本号（标题旁徽标）；pywebview 后端从 Python 取，其他环境跳过
+  if (isPyWebView()) {
+    try {
+      const ver = await window.pywebview.api.get_version();
+      const badge = $('versionBadge');
+      if (badge && ver) badge.textContent = 'v' + ver;
+    } catch (e) { /* 取不到版本不影响主功能 */ }
+  }
+
+  renderHistory(); // 初始渲染（空列表）
+  $('historyClear').addEventListener('click', () => {
+    clearHistory();
+    setStatus('已清空修改记录');
+  });
   await loadConfig();
   $('loadSample').click();
 });

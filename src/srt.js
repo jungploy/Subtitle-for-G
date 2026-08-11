@@ -9,9 +9,20 @@ function normalizeTime(t) {
   return t.trim().replace(/\./g, ',');
 }
 
+// SRT 时间码 -> 毫秒（用于比较结束时间先后）
+function tcToMs(t) {
+  const m = t && t.match(/(\d+):(\d+):(\d+),(\d+)/);
+  if (!m) return 0;
+  return ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + +m[4];
+}
+// 取两个结束时间中更晚的那一个
+function laterEnd(a, b) {
+  return tcToMs(a) >= tcToMs(b) ? a : b;
+}
+
 // 判断一行文本的主导文字体系，用于双语探测。
 // 返回 'CJK'（中日韩文）| 'Latin'（拉丁系）| 'Other'
-function dominantScript(line) {
+export function dominantScript(line) {
   let cjk = 0;
   let latin = 0;
   for (const ch of line) {
@@ -28,7 +39,7 @@ function dominantScript(line) {
 }
 
 // 两块文字是否分属不同体系 —— 双语字幕（如 原文拉丁 / 译文中日韩）的强信号
-function isCrossScript(a, b) {
+export function isCrossScript(a, b) {
   const fa = dominantScript(a);
   const fb = dominantScript(b);
   if (fa === fb) return false;
@@ -86,33 +97,72 @@ export function parseSRT(text, opts = {}) {
     raw.push({ index, start, end, content });
   }
 
-  const total = raw.length;
-  // 双语探测：超过一半的字幕块「第一行与第二行分属不同文字体系」即判定为双语（用于状态展示）。
-  // 采用跨语种信号而非单纯行数，可避免普通单语 SRT 因换行折行被误拆。
-  const cross = raw.filter(
-    (r) => r.content.length >= 2 && isCrossScript(r.content[0], r.content[1])
-  ).length;
-  const detected =
-    opts.bilingual === true ? true : opts.bilingual === false ? false : total > 0 && cross / total >= 0.5;
+  // —— 双语交错 SRT（interleaved bilingual）：每个语种单独成一条 cue，且两条 cue 共享同一时间码 ——
+  // 例如 cue A(中文) 与 cue B(英文) 都是 00:00:05,000 --> 00:00:08,000。
+  // 这种格式必须按「同时间码 + 异语种」把相邻两条 cue 合并成一条双语条目
+  // （中文→source，英文→target），否则中文和英文会变成两行互不相关的字幕。
+  // 合并条件用了两个强信号（时间码相同 + 语种不同），可有效避免误合并普通字幕。
+  const merged = [];
+  let i = 0;
+  while (i < raw.length) {
+    const cur = raw[i];
+    const nxt = raw[i + 1];
+    const pairable =
+      opts.bilingual !== false &&
+      !!nxt &&
+      nxt.start === cur.start &&
+      cur.content.length > 0 &&
+      nxt.content.length > 0 &&
+      isCrossScript(cur.content.join('\n'), nxt.content.join('\n'));
+    if (pairable) {
+      const a = cur.content.join('\n');
+      const b = nxt.content.join('\n');
+      // 中文（CJK）作原文，其它语种作译文；与文件中的 中文在上、英文在下 顺序一致。
+      let source, target;
+      if (dominantScript(a) === 'CJK') {
+        source = a;
+        target = b;
+      } else {
+        source = b;
+        target = a;
+      }
+      merged.push({
+        index: cur.index,
+        start: cur.start,
+        end: laterEnd(cur.end, nxt.end),
+        source,
+        target,
+      });
+      i += 2;
+      continue;
+    }
 
-  const items = raw.map((r) => {
-    // 逐块判断是否为双语：该块首两行分属不同文字体系（或被强制双语）才拆分。
+    // 未配对的 cue：沿用「块内双语」判定（同一 cue 内含多行异语种 → 拆两列）。
     // 防止「同一语种被硬换行折成两行」的字幕（如整段中文的片尾署名）被误拆成原文/译文。
     const blockIsBilingual =
       opts.bilingual === true ||
-      (r.content.length >= 2 && isCrossScript(r.content[0], r.content[1]));
+      (cur.content.length >= 2 && isCrossScript(cur.content[0], cur.content[1]));
     let source, target;
     if (blockIsBilingual) {
-      source = r.content[0] ?? '';
-      target = r.content.slice(1).join('\n');
+      source = cur.content[0] ?? '';
+      target = cur.content.slice(1).join('\n');
     } else {
-      source = r.content.join('\n');
+      source = cur.content.join('\n');
       target = '';
     }
-    return { index: r.index, start: r.start, end: r.end, source, target };
-  });
+    merged.push({ index: cur.index, start: cur.start, end: cur.end, source, target });
+    i += 1;
+  }
 
-  return { items, bilingual: detected };
+  const items = merged;
+  const bilingual =
+    opts.bilingual === true
+      ? true
+      : opts.bilingual === false
+        ? false
+        : items.some((it) => (it.target || '').trim().length);
+
+  return { items, bilingual };
 }
 
 /**
