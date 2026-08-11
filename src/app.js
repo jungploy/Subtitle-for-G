@@ -378,6 +378,33 @@ function hideLoading() {
   $('loadingOverlay').hidden = true;
 }
 
+// 打开 EDIUS 文件时让用户选择工程帧率（23.976 / 24 / 25），并记忆到 config。
+// 返回选中的帧率数值；理论上不可关闭，保留 null 作为兜底。
+let ediusFpsDefault = 25;
+
+function askEdiusFps() {
+  return new Promise((resolve) => {
+    const dlg = $('fpsDialog');
+    const buttons = Array.from(dlg.querySelectorAll('.fps-btn'));
+    buttons.forEach((b) => {
+      b.classList.toggle('selected', parseFloat(b.dataset.fps) === ediusFpsDefault);
+    });
+    dlg.hidden = false;
+    const cleanup = () => {
+      buttons.forEach((b) => b.removeEventListener('click', onClick));
+      dlg.hidden = true;
+    };
+    const onClick = (e) => {
+      const fps = parseFloat(e.currentTarget.dataset.fps);
+      ediusFpsDefault = fps;
+      saveConfig({ ediusFps: fps }); // 记忆，下次默认选中
+      cleanup();
+      resolve(fps);
+    };
+    buttons.forEach((b) => b.addEventListener('click', onClick));
+  });
+}
+
 async function loadText(text) {
   // 自动识别字幕格式：
   //   1) EDIUS（HH:MM:SS:FF 起始 结束 文本，常见于 EDIUS 导出的 .txt）
@@ -386,7 +413,11 @@ async function loadText(text) {
   await showLoading('正在解析字幕…');
   let result;
   if (isEdius(text)) {
-    result = parseEdius(text);
+    // 先隐藏解析进度遮罩（其 z-index 高于模态框），再让用户选择工程帧率
+    hideLoading();
+    const fps = await askEdiusFps();
+    if (fps == null) return { count: 0, bilingual: false };
+    result = parseEdius(text, fps);
   } else {
     const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
     result = isAss ? parseAss(text) : parseSRT(text);
@@ -1443,6 +1474,10 @@ async function loadConfig() {
     saveConfig({ syncSplitMode: syncSplit });
     if (typeof cfg?.table?.cell_padding === 'number') {
       applyCellPadding(cfg.table.cell_padding);
+    }
+    // EDIUS 工程帧率记忆：下次打开 EDIUS 文件时默认选中上次的选择
+    if (typeof cfg?.ediusFps === 'number') {
+      ediusFpsDefault = cfg.ediusFps;
     }
   } catch (e) {
     /* 忽略：使用默认值 */

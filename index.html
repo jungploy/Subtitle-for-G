@@ -189,6 +189,21 @@
       </div>
     </div>
 
+    <!-- EDIUS 导入帧率选择：打开 EDIUS（HH:MM:SS:FF）字幕时让用户确认工程帧率 -->
+    <div class="modal-overlay" id="fpsDialog" hidden>
+      <div class="modal">
+        <div class="modal-head">选择 EDIUS 工程帧率</div>
+        <div class="modal-body">
+          <div class="fps-desc">请确认该字幕的工程帧率，用于把时码（HH:MM:SS:FF）换算为时间。选错会导致字幕整体时间偏移。</div>
+          <div class="fps-options" id="fpsOptions">
+            <button class="fps-btn" data-fps="23.976">23.976 fps</button>
+            <button class="fps-btn" data-fps="24">24 fps</button>
+            <button class="fps-btn" data-fps="25">25 fps</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="src/app.js"></script>
   </body>
 </html>

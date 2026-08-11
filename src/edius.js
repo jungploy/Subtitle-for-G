@@ -9,23 +9,21 @@
 // 编码常见为 UTF-16LE（带 BOM），由后端 open_file 负责正确解码后传入。
 //
 // 内部时间模型统一使用 SRT 的 HH:MM:SS,mmm（毫秒），因此帧需换算成毫秒。
-// EDIUS 字幕时间码基于工程帧率；此处以 25fps（PAL，国内最常用）换算，
-// 单帧误差 < 1 帧，对字幕编辑足够；若实际为 30fps 工程，调整此常量即可。
+// EDIUS 字幕时间码基于工程帧率；帧率由用户在「打开 EDIUS 文件」时从弹窗选择
+// （23.976 / 24 / 25 fps），并记忆到 config，避免固定帧率造成的时码偏移。
 
 import { normalizeImportText } from './textnorm.js';
-
-export const EDIUS_FPS = 25;
 
 // 单条 EDIUS 行：起始时码 结束时码 文本
 // 行尾允许可选的 \r（部分文件 / 跨平台换行残留），避免误判整行不匹配。
 const LINE_RE =
   /^\s*(\d{1,2}):(\d{2}):(\d{2}):(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2}):(\d{2})\s*(.*)\r?$/;
 
-// 把 HH:MM:SS:FF（帧）转成 HH:MM:SS,mmm（毫秒）
-function ediusToSrt(h, m, s, f) {
+// 把 HH:MM:SS:FF（帧）转成 HH:MM:SS,mmm（毫秒），按给定的工程帧率 fps 换算。
+function ediusToSrt(h, m, s, f, fps) {
   const p2 = (n) => String(n).padStart(2, '0');
   const p3 = (n) => String(n).padStart(3, '0');
-  const ms = Math.round((f / EDIUS_FPS) * 1000);
+  const ms = Math.round((f / fps) * 1000);
   return `${p2(h)}:${p2(m)}:${p2(s)},${p3(ms)}`;
 }
 
@@ -45,10 +43,12 @@ export function isEdius(text) {
 
 /**
  * 解析 EDIUS 文本为条目数组。
+ * @param {string} text  EDIUS 字幕文本
+ * @param {number} fps   工程帧率（23.976 / 24 / 25），用于帧→毫秒换算
  * 返回：{ items, bilingual }
  *   items: [{ index, start, end, source, target }]
  */
-export function parseEdius(text) {
+export function parseEdius(text, fps = 25) {
   if (!text || !text.trim()) return { items: [], bilingual: false };
   const lines = text.split(/\r?\n/);
   const BS2 = String.fromCharCode(92, 92); // 双反斜杠，分隔中英
@@ -57,8 +57,8 @@ export function parseEdius(text) {
   for (const raw of lines) {
     const m = LINE_RE.exec(raw);
     if (!m) continue;
-    const start = ediusToSrt(+m[1], +m[2], +m[3], +m[4]);
-    const end = ediusToSrt(+m[5], +m[6], +m[7], +m[8]);
+    const start = ediusToSrt(+m[1], +m[2], +m[3], +m[4], fps);
+    const end = ediusToSrt(+m[5], +m[6], +m[7], +m[8], fps);
     let body = (m[9] || '').replace(/\s+$/, ''); // 去尾部空白
     // 双语拆分：两个反斜杠分隔原文/译文；无分隔则整段作原文
     let source = body;
