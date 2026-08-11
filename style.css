@@ -428,18 +428,22 @@ button.primary:hover {
 }
 
 /* 字数上限控制（原文 / 译文 文字长度阈值输入框） */
+.len-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 .len-ctl {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  gap: 2px;
+  font-size: 14px;
   color: var(--muted);
-  margin-left: 4px;
 }
 .len-input {
-  width: 46px;
-  padding: 3px 4px;
-  font-size: 12px;
+  width: 48px;
+  padding: 2px 4px;
+  font-size: 14px;
   text-align: center;
   border: 1px solid var(--border);
   border-radius: 5px;
