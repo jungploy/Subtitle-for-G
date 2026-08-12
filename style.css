@@ -1000,6 +1000,40 @@ thead th.resizing .col-resizer {
   color: #fff;
 }
 
+/* 关于框 */
+.about-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.about-version {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.about-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+.about-copyright {
+  font-size: 13px;
+  color: var(--muted);
+}
+/* 工具条右侧「关于」按钮，与间距、字数控制同组 */
+.tbtn {
+  font-size: 14px;
+  color: var(--text);
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.tbtn:hover {
+  background: #f0f4fb;
+}
+
 /* EDIUS 导入帧率选择按钮组 */
 .fps-desc {
   font-size: 12px;

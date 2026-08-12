@@ -453,13 +453,6 @@ async function loadText(text) {
   return { count: items.length, bilingual };
 }
 
-// 加载内置示例
-$('loadSample').addEventListener('click', async () => {
-  const res = await fetch('sample.srt');
-  const r = await loadText(await res.text());
-  setStatus(`已加载示例 ${r.count} 条${r.bilingual ? '（已识别双语，分列两侧）' : ''}`);
-});
-
 // 上传本地文件（浏览器回退）：按扩展名路由 —— .gsub 走项目解析，其余走字幕解析
 $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
@@ -1826,5 +1819,25 @@ window.addEventListener('DOMContentLoaded', async () => {
     setStatus('已清空修改记录');
   });
   await loadConfig();
-  $('loadSample').click();
+  setupAbout();
 });
+
+// 关于对话框：绑定「关于」按钮、关闭按钮、点击遮罩 / Esc 关闭，并填充版本号
+function setupAbout() {
+  const dlg = $('aboutDialog');
+  if (!dlg) return;
+  const close = () => { dlg.hidden = true; };
+  $('aboutBtn').addEventListener('click', () => { dlg.hidden = false; });
+  $('aboutClose').addEventListener('click', close);
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
+  dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  // 填充版本号（pywebview 下从 Python 取；其他环境取不到则保持占位）
+  if (isPyWebView()) {
+    try {
+      window.pywebview.api.get_version().then((ver) => {
+        const el = $('aboutVersion');
+        if (el && ver) el.textContent = ver;
+      });
+    } catch (e) { /* 取不到版本不影响关于框显示 */ }
+  }
+}
