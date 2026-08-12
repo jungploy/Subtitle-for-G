@@ -475,9 +475,11 @@ button.primary:hover {
   border-color: var(--accent);
 }
 
-/* 单元格文字超长（超过字数上限）标红提醒 */
-.source-line.over-limit,
-.target-line.over-limit {
+/* 单元格文字超长（超过字数上限）标红提醒。
+   必须用 .sub-table 前缀提高选择器权重，否则会被后面 .sub-table .source-line 的
+   color: var(--text) 覆盖，导致类加上了也看不到红色。 */
+.sub-table .source-line.over-limit,
+.sub-table .target-line.over-limit {
   color: #e5484d;
 }
 
