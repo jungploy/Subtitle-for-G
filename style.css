@@ -1020,18 +1020,9 @@ thead th.resizing .col-resizer {
   font-size: 13px;
   color: var(--muted);
 }
-/* 工具条右侧「关于」按钮，与间距、字数控制同组 */
-.tbtn {
-  font-size: 14px;
-  color: var(--text);
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-}
-.tbtn:hover {
-  background: #f0f4fb;
+/* 「关于」按钮：位于顶部工具栏最右侧（贴右边缘） */
+#aboutBtn {
+  margin-left: auto;
 }
 
 /* EDIUS 导入帧率选择按钮组 */
