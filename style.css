@@ -376,6 +376,12 @@ button.primary:hover {
   background: #f0f4fb;
 }
 
+.dropdown-divider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
 /* 保存菜单内的导出二级子菜单（悬浮向右飞出） */
 .submenu-item {
   position: relative;

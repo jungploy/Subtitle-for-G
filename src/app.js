@@ -465,6 +465,13 @@ $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const text = await f.text();
+  // 仅导入时码（浏览器回退）：走专用逻辑，不触发普通导入
+  if (pendingTimecodeImport) {
+    pendingTimecodeImport = false;
+    await applyTimecodesFromText(text, f.name);
+    e.target.value = '';
+    return;
+  }
   if (f.name.toLowerCase().endsWith('.gsub')) {
     openProjectFromText(text, f.name);
     return;
@@ -560,6 +567,92 @@ function importDocx() {
   } else {
     setStatus('Word 智能导入仅桌面版（.exe）支持');
   }
+}
+
+// 仅导入时码：用带时码的文件（EDIUS .txt / SRT / ASS 等）的时码，按行序替换当前列表的时码。
+// 文本与译文保持不变；当前列表为空则提示。文件名仅用于状态栏显示。
+// 浏览器回退时通过隐藏 fileInput 取文件，用 pendingTimecodeImport 标记用途。
+let pendingTimecodeImport = false;
+
+function importTimecodes() {
+  if (!editor.getItems().length) {
+    setStatus('当前列表为空，无法替换时码');
+    return;
+  }
+  if (isTauri()) {
+    try {
+      return (async () => {
+        const path = await window.__TAURI__.dialog.open({
+          multiple: false,
+          filters: [{ name: '时码文件', extensions: ['srt', 'vtt', 'ass', 'txt'] }],
+        });
+        if (!path) return;
+        const text = await window.__TAURI__.core.invoke('read_file', { path });
+        await applyTimecodesFromText(text, path);
+      })().catch((e) => setStatus('导入时码失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('导入时码失败：' + (e?.message || e));
+    }
+  } else if (isPyWebView()) {
+    try {
+      return (async () => {
+        const r = await window.pywebview.api.open_file();
+        if (!r) return;
+        await applyTimecodesFromText(r.text, r.path);
+      })().catch((e) => setStatus('导入时码失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('导入时码失败：' + (e?.message || e));
+    }
+  } else {
+    pendingTimecodeImport = true;
+    $('fileInput').click();
+  }
+}
+
+// 从文件文本解析时码并替换当前列表时码（按行序）。复用 loadText 的格式识别逻辑。
+async function applyTimecodesFromText(text, path) {
+  const current = editor.getItems();
+  if (!current.length) { setStatus('当前列表为空，无法替换时码'); return; }
+
+  // 解析时码（与 loadText 一致：EDIUS → ASS → SRT/VTT/纯文本）
+  let parsed;
+  if (isEdius(text)) {
+    let fps = ediusProbeFps(text);
+    if (fps == null) {
+      hideLoading();
+      fps = await askEdiusFps(['23.976', '24', '25']);
+      if (fps == null) return; // 用户取消帧率选择
+    }
+    parsed = parseEdius(text, fps).items;
+  } else {
+    const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
+    parsed = (isAss ? parseAss(text) : parseSRT(text)).items;
+  }
+
+  if (!parsed.length) { setStatus('所选文件未解析出任何时码'); return; }
+
+  let replaced = 0;
+  const updated = current.map((it, i) => {
+    if (i < parsed.length && parsed[i].start && parsed[i].end) {
+      replaced++;
+      return { ...it, start: parsed[i].start, end: parsed[i].end };
+    }
+    return it;
+  });
+  editor.setItems(updated);
+  updateStats();
+  updateSelectionStats();
+  dirty = true;
+  pushProjectBuffer();
+
+  const name = path ? `（${path.split(/[\\/]/).pop()}）` : '';
+  let msg = `已用时码文件${name}替换 ${replaced} 条时码`;
+  if (parsed.length < current.length) {
+    msg += `；文件仅 ${parsed.length} 条，其余 ${current.length - parsed.length} 条时码未改动`;
+  } else if (parsed.length > current.length) {
+    msg += `；文件共 ${parsed.length} 条，超出当前列表的 ${parsed.length - current.length} 条已忽略`;
+  }
+  setStatus(msg);
 }
 
 // 下载导出（浏览器回退）
@@ -1639,6 +1732,7 @@ openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
     if (action === 'srt') openSrt();
     else if (action === 'txt') importTxt();
     else if (action === 'docx') importDocx();
+    else if (action === 'tc') importTimecodes();
     else openProject();
   });
 });
