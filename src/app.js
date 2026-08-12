@@ -1820,15 +1820,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   try { clearTimeout(window.__BOOT_WATCHDOG__); } catch (e) {}
   try { sessionStorage.removeItem('sub_boot_retry'); } catch (e) {}
 
-  // 显示程序版本号（标题旁徽标）；pywebview 后端从 Python 取，其他环境跳过
-  if (isPyWebView()) {
-    try {
-      const ver = await window.pywebview.api.get_version();
-      const badge = $('versionBadge');
-      if (badge && ver) badge.textContent = 'v' + ver;
-    } catch (e) { /* 取不到版本不影响主功能 */ }
-  }
-
   renderHistory(); // 初始渲染（空列表）
   $('historyClear').addEventListener('click', () => {
     clearHistory();
