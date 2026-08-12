@@ -77,6 +77,26 @@ function isPyWebView() {
   return typeof window !== 'undefined' && window.pywebview && window.pywebview.api;
 }
 
+// 等待 pywebview api 注入完成。pywebview 在页面完全加载后才注入 window.pywebview.api
+// 并派发 pywebviewready 事件，因此在 DOMContentLoaded 时直接读 api 会失败（api 尚不存在）。
+// 必须等该事件（或轮询到 api）后再执行依赖 api 的初始化（例如恢复配置）。
+function whenApiReady(cb) {
+  if (window.pywebview && window.pywebview.api) {
+    cb();
+    return;
+  }
+  const handler = () => cb();
+  window.addEventListener('pywebviewready', handler, { once: true });
+  // 兜底：万一事件派发早于本监听注册（api 已注入但事件已过），轮询等待 api 出现
+  const timer = setInterval(() => {
+    if (window.pywebview && window.pywebview.api) {
+      clearInterval(timer);
+      window.removeEventListener('pywebviewready', handler);
+      cb();
+    }
+  }, 100);
+}
+
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
@@ -1650,7 +1670,8 @@ function applyCellPadding(pad) {
 function saveConfig(patch) {
   if (!isPyWebView()) return;
   try {
-    window.pywebview.api.save_config(patch);
+    const p = window.pywebview.api.save_config(patch);
+    if (p && typeof p.catch === 'function') p.catch(() => {});
   } catch (e) {
     /* 忽略保存失败 */
   }
@@ -1831,7 +1852,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     clearHistory();
     setStatus('已清空修改记录');
   });
-  await loadConfig();
+  // 配置恢复依赖 pywebview api，必须等 api 注入完成后再执行（DOMContentLoaded 时 api 尚未就绪）
+  whenApiReady(() => { loadConfig(); });
   setupAbout();
 });
 
