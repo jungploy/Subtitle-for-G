@@ -1827,17 +1827,28 @@ function setupAbout() {
   const dlg = $('aboutDialog');
   if (!dlg) return;
   const close = () => { dlg.hidden = true; };
-  $('aboutBtn').addEventListener('click', () => { dlg.hidden = false; });
+  // 填充版本号：pywebview 下从 Python 取；其他环境取不到则保持占位。
+  // 注意：pywebview 的 api 在 pywebviewready 之后才注入，初始化（DOMContentLoaded）
+  // 时 api 可能尚不存在，所以这里既在就绪事件后填充，也在每次打开对话框时填充，
+  // 确保点击「关于」时一定能拿到版本号。
+  const fillVersion = () => {
+    if (!isPyWebView()) return;
+    try {
+      const p = window.pywebview.api.get_version();
+      if (p && typeof p.then === 'function') {
+        p.then((ver) => { const el = $('aboutVersion'); if (el && ver) el.textContent = ver; });
+      } else if (p) {
+        const el = $('aboutVersion'); if (el) el.textContent = p;
+      }
+    } catch (e) { /* 取不到版本不影响关于框显示 */ }
+  };
+  $('aboutBtn').addEventListener('click', () => { dlg.hidden = false; fillVersion(); });
   $('aboutClose').addEventListener('click', close);
   dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
   dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-  // 填充版本号（pywebview 下从 Python 取；其他环境取不到则保持占位）
   if (isPyWebView()) {
-    try {
-      window.pywebview.api.get_version().then((ver) => {
-        const el = $('aboutVersion');
-        if (el && ver) el.textContent = ver;
-      });
-    } catch (e) { /* 取不到版本不影响关于框显示 */ }
+    fillVersion();
+  } else {
+    window.addEventListener('pywebviewready', fillVersion);
   }
 }
