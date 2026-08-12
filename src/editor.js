@@ -97,6 +97,8 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     div.dataset.side = side;
 
     div.addEventListener('input', () => {
+      const i = rowIndexOf(div);
+      if (i < 0) return;
       items[i][side] = div.innerHTML;
       autoGrow(div);
       onChange && onChange(items);
@@ -116,10 +118,14 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     // 双击原文/译文单元格才进入编辑态；单击整行任意位置都只做「选中」，不进入编辑。
     div.addEventListener('dblclick', (e) => {
       e.preventDefault();
+      const i = rowIndexOf(div);
+      if (i < 0) return;
       startEdit(i, side, 'point', { x: e.clientX, y: e.clientY });
     });
     div.addEventListener('keydown', (e) => {
       if (editingEl !== div) return; // 只有正在编辑的这个单元格才响应 Enter / 方向键
+      const i = rowIndexOf(div);
+      if (i < 0) return;
       if (e.key === 'Enter') {
         if (e.ctrlKey || e.shiftKey) {
           // Ctrl / Shift + Enter：在当前字幕内插入换行（双行），不产生新字幕行
@@ -185,15 +191,16 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     targetEl.dataset.placeholder = '在此输入翻译…';
 
     tr.addEventListener('mousedown', (e) => {
+      const rowIdx = +tr.dataset.index;
       // 编辑态下点击别的行：先退出编辑态，再让目标行可被正常选中。
-      if (editingEl && editingIndex !== i) exitEdit();
+      if (editingEl && editingIndex !== rowIdx) exitEdit();
       // 非编辑态：在「文本选区竞争发生之前」就决定行选中——立即 preventDefault
       // 阻止浏览器把 Shift/拖拽单击当成跨单元格文本选区扩展（这正是 WebView2 下
       // 「选不了多行」的根因），并当场 selectRow，使选择稳定可靠。
       // 双击进入编辑不受影响：startEdit 会主动 focus 单元格并重置选区。
       if (!editingEl) {
         e.preventDefault();
-        selectRow(i, e.shiftKey, e.ctrlKey || e.metaKey);
+        selectRow(rowIdx, e.shiftKey, e.ctrlKey || e.metaKey);
       }
     });
     tr.addEventListener('click', (e) => {
@@ -227,6 +234,47 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     items.forEach((it, i) => tbody.appendChild(makeRow(i, it)));
     highlightSelection();
     paintLengthFlags();
+  }
+
+  // 取单元格所在行的当前位置索引（从 DOM 的 dataset.index 实时读取，
+  // 而非闭包捕获的 i，这样局部刷新 / 插入行后其余行的事件仍能正确定位）。
+  function rowIndexOf(el) {
+    const tr = el && el.closest ? el.closest('tr') : null;
+    return tr ? (+tr.dataset.index || 0) : -1;
+  }
+
+  // —— 局部刷新：断句 / 插入等只影响少数行时，避免整表重绘导致卡顿 ——
+  // 重新构建指定位置的一行（内容已变更）：用新节点替换旧节点，保留其余行 DOM。
+  function refreshRow(i) {
+    const old = tbody.children[i];
+    if (!old) return null;
+    const tr = makeRow(i, items[i]);
+    old.replaceWith(tr);
+    return tr;
+  }
+  // 在位置 i 之后插入一行（items[i+1]），并修正其后所有行的 dataset.index（位置→行号）
+  // 与首列序号文字（renumber 已更新数据里的 it.index，未重建的行需同步显示）。
+  function insertRowAfter(i) {
+    const tr = makeRow(i + 1, items[i + 1]);
+    const ref = tbody.children[i];
+    if (ref && ref.nextSibling) ref.parentNode.insertBefore(tr, ref.nextSibling);
+    else tbody.appendChild(tr);
+    for (let k = i + 2; k < tbody.children.length; k++) {
+      const trk = tbody.children[k];
+      trk.dataset.index = k;
+      const idxCell = trk.querySelector('.cell-index');
+      if (idxCell) idxCell.textContent = items[k].index ?? k + 1;
+    }
+    return tr;
+  }
+  // 仅重绘单行的超长标红标记（避免 paintLengthFlags 全表扫描）。
+  function paintRowFlags(i) {
+    const tr = tbody.children[i];
+    if (!tr) return;
+    const sEl = tr.querySelector('.source-line');
+    const tEl = tr.querySelector('.target-line');
+    if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && sEl.textContent.length > srcLimit);
+    if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && tEl.textContent.length > tgtLimit);
   }
 
   // 依据 selected / activeIndex 刷新行的选中态：所有 selected 行加 .selected，
@@ -462,7 +510,12 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       activeIndex = i + 1;
       anchorIndex = i + 1;
       selected = new Set([i + 1]);
-      render();
+      // 仅刷新受影响的第 i 行与下方第 i+1 行，避免整表重绘卡顿
+      refreshRow(i);
+      refreshRow(i + 1);
+      highlightSelection();
+      paintRowFlags(i);
+      paintRowFlags(i + 1);
       startEdit(i + 1, side, 'start');
       return;
     }
@@ -503,7 +556,12 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     activeIndex = i + 1;
     anchorIndex = i + 1;
     selected = new Set([i + 1]);
-    render();
+    // 仅刷新受影响的第 i 行，并在其后再插入新行；其余行 DOM 复用，避免整表重绘卡顿
+    refreshRow(i);
+    insertRowAfter(i);
+    highlightSelection();
+    paintRowFlags(i);
+    paintRowFlags(i + 1);
     startEdit(i + 1, side, 'start');
   }
 
