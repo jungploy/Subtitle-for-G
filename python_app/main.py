@@ -659,6 +659,9 @@ class Api:
         self._project_path = None
         self._project_xml = ''
         self._project_dirty = False
+        # 表格当前是否有内容：前端在内容变化（导入 / 编辑 / 清空）时同步，
+        # 供「关闭时弹确认」判断——有内容才询问，空表直接关。
+        self._has_content = False
 
     def get_version(self):
         return VERSION
@@ -675,6 +678,20 @@ class Api:
                 cfg[k] = v
         _save_config(cfg)
         return cfg
+
+    def set_window_title(self, text):
+        # 前端把「当前打开的文件名」推过来，更新原生窗口标题栏
+        text = text or 'Subtitle-for-G - 字幕双语编辑器'
+        def _set():
+            try:
+                webview.windows[0].title = text
+            except Exception:
+                pass
+        _run_on_ui(_set)
+
+    def set_has_content(self, v):
+        # 前端同步表格是否有内容，供关闭时弹确认判断
+        self._has_content = bool(v)
 
     def translate(self, payload):
         lines = payload.get('lines', []) or []
@@ -1045,7 +1062,8 @@ if __name__ == '__main__':
 
                 def _handler(sender, args):
                     _persist_geometry()
-                    if not api._project_dirty:
+                    # 表格为空时直接关闭；有内容才弹确认（是否保存工程）
+                    if not api._has_content:
                         return
                     try:
                         res = MessageBox.Show(

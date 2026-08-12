@@ -101,6 +101,27 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+// 把「当前打开的文件名」同步到原生窗口标题栏（不再占用底部状态栏）
+function refreshWindowTitle() {
+  const base = 'Subtitle-for-G - 字幕双语编辑器';
+  const p = currentProjectPath || currentSourcePath || '';
+  const name = (p.split(/[\\/]/).pop()) || '';
+  const t = name ? base + ' — ' + name : base;
+  if (isPyWebView()) {
+    try { window.pywebview.api.set_window_title(t); } catch (e) {}
+  }
+}
+
+// 表格内容状态：空表时「保存项目」按钮禁用，并通知后端关闭时是否弹确认
+function updateContentState() {
+  const has = editor.getItems().length > 0;
+  const btn = $('saveProject');
+  if (btn) btn.disabled = !has;
+  if (isPyWebView()) {
+    try { window.pywebview.api.set_has_content(has); } catch (e) {}
+  }
+}
+
 // 状态栏全文翻译进度条：percent 为 0~100 的数字；label 可选，会同步写进状态文字。
 // indeterminate=true 时显示「不确定（跑动）」动画——用于整篇翻译（无真实百分比）。
 const progressEl = $('statusProgress');
@@ -375,6 +396,8 @@ async function applyImportedItems(rawItems, msg) {
   dirty = true;
   pushProjectBuffer();
   hideLoading();
+  refreshWindowTitle();
+  updateContentState();
   setStatus(msg);
 }
 
@@ -470,6 +493,8 @@ async function loadText(text) {
   dirty = true;
   pushProjectBuffer();
   hideLoading();
+  refreshWindowTitle();
+  updateContentState();
   return { count: items.length, bilingual };
 }
 
@@ -494,17 +519,17 @@ $('fileInput').addEventListener('change', async (e) => {
     // 带时间码的 EDIUS 格式 .txt 也走 loadText（自动识别）；否则按无时码纯文本处理
     if (isEdius(text)) {
       const r = await loadText(text);
-      setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+      setStatus(`已加载文件（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
     } else {
       const items = parseLinesToItems(text);
       const bil = items.some((it) => it.target && it.target.trim());
-      applyImportedItems(items, `已导入文本：${f.name}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
+      applyImportedItems(items, `已导入文本（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
     }
     return;
   }
   currentSourcePath = f.name; // 浏览器无完整路径，仅记录文件名
   const r = await loadText(text);
-  setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+  setStatus(`已加载文件（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
 // 打开 SRT / 字幕文件：Tauri 用原生对话框 + Rust 读取；pywebview 用 Python 原生对话框；
@@ -521,7 +546,7 @@ function openSrt() {
         const text = await window.__TAURI__.core.invoke('read_file', { path });
         currentSourcePath = path;
         const r = await loadText(text);
-        setStatus(`已打开：${path}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+        setStatus(`已打开字幕文件（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
       })().catch((e) => setStatus('打开失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
@@ -533,7 +558,7 @@ function openSrt() {
         if (!r) return;
         currentSourcePath = r.path;
         const info = await loadText(r.text);
-        setStatus(`已打开：${r.path}（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
+        setStatus(`已打开字幕文件（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
       })().catch((e) => setStatus('打开失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('打开失败：' + (e?.message || e));
@@ -553,7 +578,7 @@ function importTxt() {
         currentSourcePath = r.path || '';
         const items = parseLinesToItems(r.text);
         const bil = items.some((it) => it.target && it.target.trim());
-        await applyImportedItems(items, `已导入文本：${r.path}（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
+        await applyImportedItems(items, `已导入文本（${items.length} 条 → ${bil ? '原文+译文' : '原文'}）`);
       })().catch((e) => setStatus('导入失败：' + (e?.message || e)));
     } catch (e) {
       setStatus('导入失败：' + (e?.message || e));
@@ -740,6 +765,8 @@ async function openProjectFromText(text, name, path) {
     if (meta.sourcePath) currentSourcePath = meta.sourcePath;
     pushProjectBuffer();
     hideLoading();
+    refreshWindowTitle();
+    updateContentState();
     setStatus(`已打开项目：${name}（${items.length} 条）`);
   } catch (e) {
     hideLoading();
@@ -1138,6 +1165,7 @@ function doInsert() {
   pushHistory('插入行', before, `在第 ${pos + 1} 行插入空白字幕`);
   updateStats();
   updateSelectionStats();
+  updateContentState();
   setStatus('已插入空白字幕行');
 }
 
@@ -1160,6 +1188,7 @@ async function doDelete() {
   pushHistory(`删除 ${sel.length} 行`, before, `删除 ${sel.length} 行字幕`);
   updateStats();
   updateSelectionStats();
+  updateContentState();
   setStatus(`已删除 ${sel.length} 行字幕`);
 }
 
@@ -1448,7 +1477,7 @@ window.addEventListener('drop', async (e) => {
   }
   currentSourcePath = f.name;
   const r = await loadText(text);
-  setStatus(`已加载文件：${f.name}（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+  setStatus(`已加载文件（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
 });
 
 // 翻译面板（点击「翻译」按钮展开 / 收起，与查找替换一致）
@@ -1852,8 +1881,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     clearHistory();
     setStatus('已清空修改记录');
   });
+  // 初始空表：禁用「保存项目」按钮（内容变化后由 updateContentState 重新启用）
+  updateContentState();
   // 配置恢复依赖 pywebview api，必须等 api 注入完成后再执行（DOMContentLoaded 时 api 尚未就绪）
-  whenApiReady(() => { loadConfig(); });
+  whenApiReady(() => { loadConfig(); updateContentState(); });
   setupAbout();
 });
 
