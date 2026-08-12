@@ -82,6 +82,13 @@
     <div class="findbar" id="findBar" hidden>
       <input type="text" id="findQuery" placeholder="查找…" />
       <input type="text" id="findReplace" placeholder="替换为（可空）" />
+      <label class="find-scope">范围
+        <select id="findScope">
+          <option value="source">原文</option>
+          <option value="target">译文</option>
+          <option value="all" selected>全文</option>
+        </select>
+      </label>
       <label title="区分大小写"><input type="checkbox" id="findCase" /> 区分大小写</label>
       <label title="全词匹配"><input type="checkbox" id="findWord" /> 全词</label>
       <label title="按正则表达式匹配"><input type="checkbox" id="findRegex" /> 正则</label>

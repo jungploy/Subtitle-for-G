@@ -523,6 +523,24 @@ button.primary:hover {
   cursor: pointer;
 }
 
+/* 查找栏「范围」下拉：原文 / 译文 / 全文 */
+.find-scope {
+  gap: 4px;
+}
+.find-scope select {
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+.find-scope select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .find-info {
   font-size: 12px;
   color: var(--muted);

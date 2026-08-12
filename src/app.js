@@ -1171,6 +1171,7 @@ window.addEventListener('keydown', (e) => {
 const findBar = $('findBar');
 const findQuery = $('findQuery');
 const findReplace = $('findReplace');
+const findScope = $('findScope');
 const findCase = $('findCase');
 const findWord = $('findWord');
 const findRegex = $('findRegex');
@@ -1178,6 +1179,14 @@ const findInfo = $('findInfo');
 const findPreview = $('findPreview');
 
 const findState = { matches: [], idx: -1 };
+
+// 依据当前「范围」选择框返回要扫描的列：原文 / 译文 / 全文（两侧）
+function scopeSides() {
+  const v = findScope ? findScope.value : 'all';
+  if (v === 'source') return ['source'];
+  if (v === 'target') return ['target'];
+  return ['source', 'target'];
+}
 
 function escapeHtml(s) {
   return (s || '').replace(/[&<>"']/g, (c) =>
@@ -1211,7 +1220,7 @@ function buildMatches() {
   }
   const items = editor.getItems();
   const matches = [];
-  const sides = ['source', 'target'];
+  const sides = scopeSides();
   items.forEach((it, i) => {
     sides.forEach((side) => {
       const text = plainText(it[side] || '');
@@ -1340,8 +1349,9 @@ function replaceAll() {
   const before = deepClone(items);
   let count = 0;
   const repl = findReplace.value;
+  const sides = scopeSides();
   items.forEach((it) => {
-    ['source', 'target'].forEach((side) => {
+    sides.forEach((side) => {
       const { html, count: c } = replaceRich(it[side] || '', re, repl);
       if (c) {
         it[side] = html;
@@ -1352,10 +1362,13 @@ function replaceAll() {
   dirty = true;
   schedulePushBuffer();
   editor.setItems(items);
+  const scopeName = { source: '原文', target: '译文', all: '全文' }[
+    findScope ? findScope.value : 'all'
+  ];
   pushHistory(
     `全部替换（${count} 处）`,
     before,
-    `全文将「${trunc(q, 16)}」→「${trunc(repl, 16)}」，共 ${count} 处`
+    `${scopeName}将「${trunc(q, 16)}」→「${trunc(repl, 16)}」，共 ${count} 处`
   );
   editor.clearMatch();
   findState.matches = [];
@@ -1370,7 +1383,7 @@ $('findReplaceToggle').addEventListener('click', () =>
 );
 $('findClose').addEventListener('click', closeFindBar);
 findQuery.addEventListener('input', () => runSearch(true));
-[findCase, findWord, findRegex].forEach((cb) =>
+[findCase, findWord, findRegex, findScope].forEach((cb) =>
   cb.addEventListener('change', () => runSearch(true))
 );
 $('findNext').addEventListener('click', () => gotoMatch(1));
