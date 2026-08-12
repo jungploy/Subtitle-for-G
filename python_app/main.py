@@ -146,14 +146,22 @@ PORT = 8011
 DEFAULT_CONFIG = {
     'window': {'width': 1100, 'height': 720, 'x': None, 'y': None, 'maximized': False},
     'table': {'cell_padding': 4},
-    'last_dir': '',
+    'lengthLimits': {'source': 0, 'target': 0},
+    'syncSplitMode': False,
+    'wholeDocMode': False,
+    'ediusFps': None,
     'provider': 'mymemory',
+    'last_dir': '',
 }
 
 
 def _config_path():
     if getattr(sys, 'frozen', False):
-        cand = os.path.join(os.path.dirname(sys.executable), 'config.json')
+        # PyInstaller --onefile 运行时 sys.executable 指向临时解压目录，
+        # 而 sys.argv[0] 才是用户实际双击的 exe 路径。配置必须放在后者旁边，
+        # 否则程序重启后临时目录被清理，配置会丢失。
+        exe_path = sys.argv[0] if sys.argv and sys.argv[0] else sys.executable
+        cand = os.path.join(os.path.dirname(os.path.abspath(exe_path)), 'config.json')
     else:
         cand = os.path.join(HERE, 'config.json')
     d = os.path.dirname(cand)

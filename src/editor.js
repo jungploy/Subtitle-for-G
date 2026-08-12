@@ -100,6 +100,9 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       items[i][side] = div.innerHTML;
       autoGrow(div);
       onChange && onChange(items);
+      // 实时更新当前单元格字数超限标红（setLengthLimits 已保证上限值最新）
+      const limit = side === 'source' ? srcLimit : tgtLimit;
+      div.classList.toggle('over-limit', limit > 0 && div.textContent.length > limit);
     });
     // 聚焦时仅记录当前单元格（供字体格式按钮使用）；不在此触发 onEditBegin，
     // 编辑会话只在「双击进入」或「focusCell / 上下键切换」时开始，避免单击即进入编辑。
