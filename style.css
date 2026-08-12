@@ -9,6 +9,7 @@
   --active-border: #f0c060;
   --badge-bg: #eef1f5;
   --cell-pad: 4px;
+  --cell-font-size: 14px;
 }
 
 * {
@@ -24,6 +25,31 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+/* 护眼模式：整体切换为柔和草绿主题，降低长时间校对的视觉刺激 */
+body.eye-care {
+  --bg: #c9e6cf;
+  --panel: #e2f2e6;
+  --border: #b6d8bd;
+  --text: #21331f;
+  --muted: #5e7a63;
+  --badge-bg: #d3e8d8;
+  --active-bg: #fff1ba;
+  --active-border: #e6c75e;
+}
+/* 护眼模式下编辑中的单元格也用柔和绿调，与整体主题协调 */
+body.eye-care .sub-table .source-line:focus,
+body.eye-care .sub-table .target-line:focus,
+body.eye-care .sub-table .source-line[contenteditable='true'],
+body.eye-care .sub-table .target-line[contenteditable='true'] {
+  background: #eaf6ec;
+}
+/* 护眼模式按钮高亮态 */
+#eyeCareBtn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* 顶部工具栏 */
@@ -83,7 +109,7 @@ body {
 }
 
 .font-style-label {
-  font-size: 12px;
+  font-size: inherit; /* 与左侧其它控件统一（13px），不再单独 12px */
   color: var(--muted);
 }
 
@@ -92,6 +118,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  font-size: 13px; /* 整组统一字号：锁定原文/同步断句/原文/译文/字号/字体样式 一致，避免混排大小不一 */
 }
 .toolbar-sep {
   display: inline-block;
@@ -100,31 +127,6 @@ body {
   background: var(--border);
   margin: 0 4px;
   vertical-align: middle;
-}
-
-/* 表格工具条右侧分组：同步断句 + 字数控制 + 间距，紧挨在一起（不随 space-between 被推散） */
-.toolbar-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 14px;
-  color: var(--text);
-}
-/* 右侧分组内的「交换文本」按钮：字号/颜色与同组控件统一，保留原生按钮边框 */
-.toolbar-right > button.tbtn-right {
-  font-size: inherit;
-  color: inherit;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-}
-.toolbar-right > button.tbtn-right:hover {
-  background: #f1f3f5;
-}
-.toolbar-right > button.tbtn-right:active {
-  background: #e6e9ed;
 }
 
 /* 表格工具条「同步断句」开关（右侧分组内，字号/颜色与字数控制统一） */
@@ -186,7 +188,7 @@ body {
   min-width: 30px;
   height: 28px;
   padding: 0 10px;
-  font-size: 14px;
+  font-size: inherit; /* 与左侧其它控件统一（13px），B/I/U 不再单独 14px */
   line-height: 1;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -433,27 +435,6 @@ button.primary:hover {
   font-size: 12px;
 }
 
-.pad-ctl {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pad-ctl button {
-  width: 26px;
-  padding: 4px 0;
-  font-size: 15px;
-  line-height: 1;
-  text-align: center;
-}
-
-.pad-ctl #padVal {
-  min-width: 16px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
 /* 字数上限控制（原文 / 译文 文字长度阈值输入框） */
 .len-group {
   display: inline-flex;
@@ -470,7 +451,7 @@ button.primary:hover {
 .len-input {
   width: 48px;
   padding: 2px 4px;
-  font-size: 14px;
+  font-size: inherit; /* 与左侧标签统一（13px），数字输入框不再单独 14px */
   text-align: center;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -803,8 +784,8 @@ button.primary:hover {
 }
 
 .sub-table {
-  min-width: 100%;
-  width: auto;
+  width: 100%;
+  min-width: 720px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
@@ -868,23 +849,22 @@ thead th.resizing .col-resizer {
   border-right: none;
 }
 
-/* 列宽 */
+/* 列宽自适应：
+   序号 / 起始 / 结束 这几列按时码内容取较窄的固定宽度；
+   原文 / 译文两列不写死宽度，在 table-layout:fixed 下平分剩余空间，
+   从而随窗口宽度自动撑满、互不挤压。手动拖拽列宽时由 JS 写入内联宽度覆盖。 */
 .col-index {
-  width: 56px;
+  width: 52px;
 }
 
 .col-start,
 .col-end {
-  width: 108px;
-}
-
-.col-duration {
-  width: 80px;
+  width: 100px;
 }
 
 .col-source,
 .col-target {
-  width: 420px;
+  width: auto;
 }
 
 .cell-index {
@@ -894,8 +874,7 @@ thead th.resizing .col-resizer {
 }
 
 .cell-start,
-.cell-end,
-.cell-duration {
+.cell-end {
   font-variant-numeric: tabular-nums;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   color: #5a6069;
@@ -903,21 +882,20 @@ thead th.resizing .col-resizer {
   white-space: nowrap;
 }
 
-.cell-duration {
-  color: var(--muted);
-}
-
-/* 原文/译文富文本单元格（标记已隐藏，字体样式生效） */
+/* 原文/译文富文本单元格（标记已隐藏，字体样式生效）。
+   行高自适应：min-height 用相对字号的 em（≈ 原 46px@14px），随字号缩放而不会裁切；
+   实际高度由 JS autoGrow 设为内容高度，内容换行 / 字号变化时自动撑高。 */
 .sub-table .source-line,
 .sub-table .target-line {
   display: block;
   width: 100%;
-  min-height: 46px;
+  min-height: 3.2em;
+  height: auto;
   border: none;
   outline: none;
   background: transparent;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--cell-font-size, 14px);
   line-height: 1.4;
   padding: 0;
   margin: 0;

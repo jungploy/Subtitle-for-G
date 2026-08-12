@@ -27,15 +27,10 @@
     <div class="toolbar">
       <h1>Subtitle-for-G</h1>
       <div class="dropdown" id="openDropdown">
-        <button id="openBtn" class="drop-toggle" title="打开字幕项目文件（.gsub）">打开项目</button>
-        <button id="openCaret" class="caret" title="选择导入类型" aria-haspopup="true" aria-expanded="false">▾</button>
+        <button id="openBtn" class="drop-toggle" title="打开字幕文件（自动判断类型：项目/字幕/Word 文档）">打开字幕</button>
+        <button id="openCaret" class="caret" title="更多导入选项" aria-haspopup="true" aria-expanded="false">▾</button>
         <div class="dropdown-menu" id="openMenu" hidden>
-          <button class="dropdown-item" data-action="srt">导入带时码字幕</button>
-          <button class="dropdown-item" data-action="txt">导入无时码文本</button>
-          <button class="dropdown-item" data-action="docx">智能导入其他文档</button>
-          <button class="dropdown-item" data-action="seg" title="打开 Word/文本，先预览再按标点+最小长度断句，避免大段文本">智能分句导入</button>
-          <div class="dropdown-divider"></div>
-          <button class="dropdown-item" data-action="tc" title="用带时码的 EDIUS(.txt)/SRT/ASS 等文件的时码，按行序替换当前列表的时码（文本与译文不变）">仅导入时码</button>
+          <button class="dropdown-item" data-action="tc" title="用带时码的 EDIUS(.txt)/SRT/ASS 等文件的时码，按行序替换当前列表的时码（文本与译文不变）">导入时码</button>
         </div>
       </div>
       <div class="dropdown" id="saveDropdown">
@@ -74,6 +69,8 @@
       </div>
       <button id="findReplaceToggle" title="全文查找 / 替换（Ctrl+F）">查找替换</button>
       <button id="translateToggle" title="展开 / 收起翻译面板">翻译</button>
+      <button id="swapSides" title="把左列（原文）与右列（译文）内容互换">交换文本</button>
+      <button id="eyeCareBtn" title="护眼模式：柔和草绿背景，减轻长时间校对的视觉疲劳">护眼模式</button>
       <button id="aboutBtn" title="关于 Subtitle-for-G">关于</button>
 
       <input type="file" id="fileInput" accept=".srt,.vtt,.ass,.txt" style="display:none" />
@@ -129,19 +126,6 @@
         <!-- 表格上方工具条：左侧字体样式（B/I/U）+ 竖线分隔 + 插入/删除，右侧间距 -->
         <div class="table-toolbar">
           <span class="toolbar-left">
-            <span class="font-style-ctl">
-              <span class="font-style-label">字体样式</span>
-              <button id="fmtBold" class="fmt-btn" title="加粗 (Ctrl+B)" style="font-weight:700">B</button>
-              <button id="fmtItalic" class="fmt-btn" title="斜体 (Ctrl+I)" style="font-style:italic">I</button>
-              <button id="fmtUnderline" class="fmt-btn" title="下划线 (Ctrl+U)" style="text-decoration:underline">U</button>
-            </span>
-            <span class="toolbar-sep" aria-hidden="true"></span>
-            <button id="insertRow" title="在选中行之后插入空白字幕行（Ins）">插入</button>
-            <button id="deleteRows" title="删除选中的字幕行（Del，删除前会确认）">删除</button>
-          </span>
-          <span class="toolbar-right">
-            <button id="swapSides" class="tbtn-right" title="把左列（原文）与右列（译文）内容互换">交换文本</button>
-            <span class="toolbar-sep" aria-hidden="true"></span>
             <label class="sync-split-ctl" title="锁定后左侧原文列不可编辑，仅可编辑译文；译文单元格中间按回车会把后半段前置到下方译文单元格">
               <input type="checkbox" id="lockSource" />
               锁定原文
@@ -156,11 +140,16 @@
               <label class="len-ctl" title="译文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">译文<input type="number" id="tgtLenLimit" class="len-input" min="0" step="1" value="0" /></label>
             </span>
             <span class="toolbar-sep" aria-hidden="true"></span>
-            <label class="pad-ctl">间距
-              <button id="padMinus" type="button" title="减小间距">−</button>
-              <span id="padVal">4</span>
-              <button id="padPlus" type="button" title="增大间距">+</button>
-            </label>
+            <button id="insertRow" title="在选中行之后插入空白字幕行（Ins）">插入</button>
+            <button id="deleteRows" title="删除选中的字幕行（Del，删除前会确认）">删除</button>
+            <span class="toolbar-sep" aria-hidden="true"></span>
+            <label class="len-ctl" title="点击数字修改原文与译文的字体大小；行间距会随字号自动调整">字号<input type="number" id="fontSizeVal" class="len-input" min="8" max="48" step="1" value="14" /></label>
+            <span class="font-style-ctl">
+              <span class="font-style-label">字体样式</span>
+              <button id="fmtBold" class="fmt-btn" title="加粗 (Ctrl+B)" style="font-weight:700">B</button>
+              <button id="fmtItalic" class="fmt-btn" title="斜体 (Ctrl+I)" style="font-style:italic">I</button>
+              <button id="fmtUnderline" class="fmt-btn" title="下划线 (Ctrl+U)" style="text-decoration:underline">U</button>
+            </span>
           </span>
         </div>
         <div id="editorMount"></div>
@@ -210,6 +199,21 @@
         <div class="modal-foot">
           <button id="confirmCancel">取消</button>
           <button id="confirmOk" class="primary danger">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 拖入文件冲突：编辑状态下拖入含时码的文件时，选择「打开新文件」还是「仅导入时码」 -->
+    <div class="modal-overlay" id="dropDialog" hidden>
+      <div class="modal">
+        <div class="modal-head">导入拖入的文件</div>
+        <div class="modal-body">
+          <div id="dropMsg"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="dropCancel">取消</button>
+          <button id="dropOnlyTc">仅导入时码</button>
+          <button id="dropOpenNew" class="primary">打开新文件</button>
         </div>
       </div>
     </div>

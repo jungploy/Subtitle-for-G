@@ -11,8 +11,9 @@
 // 内部时间模型统一使用 SRT 的 HH:MM:SS,mmm（毫秒），因此帧需换算成毫秒。
 // EDIUS 字幕时间码基于工程帧率（23.976 / 24 / 25 / 29.976 fps）。
 // 时间码分隔符可能是冒号「:」或分号「;」（EDIUS 部分导出用「HH:MM:SS;FF」），两种都识别。
-// 导入时若帧号达到 25（仅 29.976 帧率才有 0..29）即自动判定为 29.976，无需弹窗询问；
-// 其余帧率（23.976 / 24 / 25）无法仅靠帧号唯一确定，仍需弹窗确认。
+// 分隔符语义：分号「;」表示丢帧（drop-frame），即工程帧率固定为 29.976 fps，导入时无需弹窗询问；
+// 全部为冒号「:」时是非丢帧，帧率无法从时码唯一确定（23.976 / 24 / 25 / 29.976 非丢帧都可能），
+// 仍需弹窗让用户确认。
 
 import { normalizeImportText } from './textnorm.js';
 
@@ -101,15 +102,23 @@ export function parseEdius(text, fps = 25) {
   return { items, bilingual };
 }
 
-// 帧率自动探测：扫描所有行的帧号（起始、结束各取一个），
-// 若帧号达到 25（仅 29.976 帧率才有 0..29）即可确定工程帧率为 29.976，
-// 导入时无需再弹窗询问。其余帧率（23.976 / 24 / 25 帧号 ≤24）返回 null，需弹窗确认。
+// 帧率自动探测（基于时码分隔符）：
+//   - 任一时码含分号「;」→ 丢帧（drop-frame），工程帧率即 29.976 fps，导入无需弹窗；
+//   - 全部时码都是冒号「:」→ 非丢帧，帧率无法仅凭时码判定，返回 null 交由上层弹窗确认；
+//   - 没有任何合法时码行 → 返回 null。
+// 只扫描每行的两个时码（不含文本），避免文本中出现分号造成误判。
 export function ediusProbeFps(text) {
   if (!text) return null;
-  let maxFrame = 0;
+  let sawTimecode = false;
+  let sawSemicolon = false;
   for (const line of text.split(/\r?\n/)) {
     const m = LINE_RE.exec(line);
-    if (m) maxFrame = Math.max(maxFrame, +m[4], +m[8]);
+    if (!m) continue;
+    sawTimecode = true;
+    // 取出「起始时码 结束时码」前缀（按空白切分，前两段即两个时码，不含文本）
+    const header = line.trim().split(/\s+/).slice(0, 2).join(' ');
+    if (header.includes(';')) sawSemicolon = true;
   }
-  return maxFrame >= 25 ? 29.976 : null;
+  if (!sawTimecode) return null;
+  return sawSemicolon ? 29.976 : null;
 }

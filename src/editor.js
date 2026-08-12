@@ -1,5 +1,5 @@
 // src/editor.js
-// 表格方式的双语字幕编辑器：序号 / 起始时码 / 结束时码 / 时长 / 原文 / 译文
+// 表格方式的双语字幕编辑器：序号 / 起始时码 / 结束时码 / 原文 / 译文
 // 每行同一 <tr>，天然等高；原文/译文文本框自动撑高。
 // 原文/译文单元格均为富文本（contentEditable）：模型里存的是「显示用 HTML」
 // （保留 <b>/<i>/<u> 与 <br>），编辑时直接读写 innerHTML，加粗/斜体/下划线等
@@ -13,19 +13,17 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       <div class="table-wrap">
         <table class="sub-table" id="subTable">
           <colgroup>
-            <col class="col-index" style="width:56px" />
-            <col class="col-start" style="width:108px" />
-            <col class="col-end" style="width:108px" />
-            <col class="col-duration" style="width:80px" />
-            <col class="col-source" style="width:420px" />
-            <col class="col-target" style="width:420px" />
+            <col class="col-index" />
+            <col class="col-start" />
+            <col class="col-end" />
+            <col class="col-source" />
+            <col class="col-target" />
           </colgroup>
           <thead>
             <tr>
               <th>序号</th>
               <th>起始时码</th>
               <th>结束时码</th>
-              <th>时长</th>
               <th>原文</th>
               <th>译文</th>
             </tr>
@@ -71,11 +69,6 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     const s = Math.floor((total % 60000) / 1000);
     const mills = total % 1000;
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(mills).padStart(3, '0')}`;
-  }
-
-  function duration(start, end) {
-    const d = timeToMs(end) - timeToMs(start);
-    return msToTime(Math.max(0, d));
   }
 
   function makeCell(cls, content) {
@@ -161,13 +154,22 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     return { td, div };
   }
 
-  // 固定行高：每行高度统一为 ROW_HEIGHT（约两行字幕），单行内容也占此高度，
-  // 内容超长（超过两行）时允许向上撑高，避免裁切。
-  const ROW_HEIGHT = 46;
+  // 行高自适应：单元格高度始终等于其内容高度，内容换行 / 字号变大时自动撑高，
+  // 不再用固定像素下限——最小高度改由 CSS 的 min-height（相对字号 em）控制，
+  // 从而随字号缩放而不会裁切文字。
   function autoGrow(el) {
     el.style.height = 'auto';
-    const h = Math.max(el.scrollHeight, ROW_HEIGHT);
-    el.style.height = h + 'px';
+    el.style.height = el.scrollHeight + 'px';
+  }
+
+  // 重算所有行的单元格高度（改字号后必须调用，否则旧高度会裁切放大后的文字）。
+  function autoGrowAll() {
+    for (const tr of tbody.children) {
+      const s = tr.querySelector('.source-line');
+      const t = tr.querySelector('.target-line');
+      if (s) autoGrow(s);
+      if (t) autoGrow(t);
+    }
   }
 
   function makeRow(i, it) {
@@ -178,12 +180,11 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     const idxTd = makeCell('cell-index', it.index ?? i + 1);
     const startTd = makeCell('cell-start', it.start || '');
     const endTd = makeCell('cell-end', it.end || '');
-    const durTd = makeCell('cell-duration', duration(it.start, it.end));
 
     const sourceCell = makeRichCell('cell-source', it.source, 'source', i);
     const targetCell = makeRichCell('cell-target', it.target, 'target', i);
 
-    [idxTd, startTd, endTd, durTd, sourceCell, targetCell].forEach((c) =>
+    [idxTd, startTd, endTd, sourceCell, targetCell].forEach((c) =>
       tr.appendChild(c.td || c)
     );
 
@@ -737,6 +738,53 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     paintLengthFlags();
     return total;
   }
+  // 增量载入（撤销/重做用）：与 setItems 行为一致，但「行数不变」时只刷新真正变化的行，
+  // 复用其余行 DOM，避免大文件（上千条）整表重绘导致撤销/重做卡顿。
+  // 行数变化时（插入/删除等操作）降级为整表 render()。
+  function setItemsIncremental(newItems) {
+    const target = newItems || [];
+    // 清除编辑态：DOM 即将变动，旧的单元格节点会被替换/销毁
+    editingEl = null;
+    editingIndex = -1;
+    editingSide = null;
+    activeEl = null;
+    activeSide = null;
+    const oldLen = items.length;
+    const newLen = target.length;
+    if (oldLen === newLen) {
+      // 长度不变：逐行比较，仅替换内容不同的行（命中 refreshRow 的局部刷新）
+      for (let i = 0; i < newLen; i++) {
+        if (!itemSame(items[i], target[i])) {
+          items[i] = target[i];
+          refreshRow(i);
+        }
+      }
+      items = target;
+      highlightSelection();
+      paintLengthFlags();
+      return;
+    }
+    // 行数变化：无法局部比对，整表重建（与旧的 setItems 等价）
+    items = target;
+    activeIndex = -1;
+    anchorIndex = -1;
+    selected = new Set();
+    render();
+  }
+
+  // 轻量比较两条字幕是否内容相同（仅比对四个字段，不深遍历）：
+  // start/end/source/target 任一不同即视为变化。撤销/重做做逐行 diff 时用，避免整表重绘。
+  function itemSame(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return (
+      a.start === b.start &&
+      a.end === b.end &&
+      a.source === b.source &&
+      a.target === b.target
+    );
+  }
+
   function getItems() {
     return items;
   }
@@ -955,5 +1003,5 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     return true;
   }
 
-  return { setItems, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit, setSourceLocked, setLengthLimits };
+  return { setItems, setItemsIncremental, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit, setSourceLocked, setLengthLimits, autoGrowAll };
 }

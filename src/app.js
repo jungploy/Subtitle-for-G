@@ -271,11 +271,12 @@ function goTo(e) {
   const k = e - 1;
   if (k < 0 || k >= history.length) return;
   if (e <= historyPoint) {
-    editor.setItems(deepClone(history[k].before));
+    // 增量刷新：行数不变时只刷新变化的行，避免大文件整表重绘卡顿
+    editor.setItemsIncremental(deepClone(history[k].before));
     historyPoint = e - 1;
     setStatus(`已回滚到「${history[k].label}」之前`);
   } else {
-    editor.setItems(deepClone(history[k].after));
+    editor.setItemsIncremental(deepClone(history[k].after));
     historyPoint = e;
     setStatus(`已重做到「${history[k].label}」之后`);
   }
@@ -358,6 +359,14 @@ function toHtml(s) {
   return s;
 }
 
+// 导入英文台本时，把长破折号统一替换为普通连字符（-），避免非 ASCII 破折号在
+// 后续导出 / 第三方字幕软件里显示异常或被截断。覆盖两种常见字符：
+//   —  em dash （U+2014，长破折号）
+//   –  en dash  （U+2013，较短，英文台本里常被当作连字符用）
+function normalizeSourceDash(s) {
+  return (s || '').replace(/[—–]/g, '-');
+}
+
 // 毫秒 -> SRT 时间码（前端版，与 editor.js 的 msToTime 等价）
 function msToTimeJs(ms) {
   const total = Math.max(0, Math.floor(ms));
@@ -407,7 +416,7 @@ async function applyImportedItems(rawItems, msg) {
     index: 0,
     start: it.start || '',
     end: it.end || '',
-    source: toHtml(it.source || ''),
+    source: toHtml(normalizeSourceDash(it.source || '')),
     target: toHtml(it.target || ''),
   }));
   await setBusy(true);
@@ -519,7 +528,7 @@ async function loadText(text) {
     const { items, bilingual } = result;
     const htmlItems = items.map((it) => ({
       ...it,
-      source: toHtml(it.source),
+      source: toHtml(normalizeSourceDash(it.source)),
       target: toHtml(it.target),
     }));
     // 分块建表并回报进度，避免大文件卡死
@@ -545,6 +554,12 @@ $('fileInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const text = await f.text();
+  // Word 文档（.docx）是二进制，前端无法解析，提示用桌面版菜单导入
+  if (f.name.toLowerCase().endsWith('.docx')) {
+    setStatus('Word 智能导入仅桌面版（.exe）支持');
+    e.target.value = '';
+    return;
+  }
   // 仅导入时码（浏览器回退）：走专用逻辑，不触发普通导入
   if (pendingTimecodeImport) {
     pendingTimecodeImport = false;
@@ -696,6 +711,99 @@ function openSegDialog() {
   const dlg = $('segDialog');
   dlg.hidden = false;
   renderSegPreview();
+}
+
+// 统一「导入字幕」入口：选文件后自动判断类型（桌面版走 Python open_file_auto，浏览器回退 fileInput）。
+//   .gsub              -> 打开项目
+//   .docx              -> 智能导入（Word，自动识别时间码）
+//   .srt/.vtt/.ass/.txt -> 导入字幕（loadText 内部再识别具体格式）
+function importAuto() {
+  if (isPyWebView()) {
+    try {
+      return (async () => {
+        const r = await window.pywebview.api.open_file_auto();
+        if (!r) return;
+        if (r.kind === 'error') { setStatus('打开失败：' + (r.error || '未知错误')); return; }
+        if (r.kind === 'project') {
+          openProjectFromText(r.text, r.path, r.path);
+        } else if (r.kind === 'docx') {
+          if (r.error) { setStatus('Word 导入失败：' + r.error); return; }
+          currentSourcePath = r.path || '';
+          await applyImportedItems(r.items || [], `已智能导入：${r.path}（${r.items ? r.items.length : 0} 条，已自动识别时间码）`);
+        } else {
+          currentSourcePath = r.path;
+          const info = await loadText(r.text);
+          setStatus(`已打开字幕文件（${info.count} 条${info.bilingual ? ' · 双语' : ''}）`);
+        }
+      })().catch((e) => setStatus('打开失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('打开失败：' + (e?.message || e));
+    }
+  } else {
+    // 浏览器回退：fileInput 的 change 内已按扩展名路由（含 .gsub / .txt / 字幕 / docx 提示）
+    $('fileInput').click();
+  }
+}
+
+// 判断文本是否含可识别的时间码（用于拖拽时决定是否需要「仅导入时码」选项）
+function fileHasTimecodes(text) {
+  return (
+    isEdius(text) ||                         // EDIUS HH:MM:SS:FF
+    /^\s*\[Script Info\]/im.test(text) ||    // ASS
+    /^\s*Dialogue:/im.test(text) ||          // ASS
+    /-->/.test(text)                          // SRT / VTT
+  );
+}
+
+// 拖入文件后的统一处理：空表直接打开；编辑状态下含时码则询问打开新文件 / 仅导入时码。
+async function handleDropFile(text, filename, isProject) {
+  const lower = filename.toLowerCase();
+  const hasContent = editor.getItems().length > 0;
+  // 项目文件与字幕文件都视为「含时码」；纯文本无时码
+  const hasTc = isProject || fileHasTimecodes(text);
+  const openNew = async () => {
+    if (isProject) {
+      await openProjectFromText(text, filename);
+    } else if (lower.endsWith('.docx')) {
+      setStatus('Word 文档请通过「导入字幕」菜单选择导入');
+    } else {
+      currentSourcePath = filename;
+      await loadText(text);
+    }
+  };
+  if (!hasContent || !hasTc) {
+    // 空表、或编辑状态下拖入无时码纯文本：直接打开/替换（不弹询问）
+    await openNew();
+    return;
+  }
+  // 编辑状态 + 含时码：询问处理方式（项目文件不支持「仅导入时码」，隐藏该按钮）
+  const choice = await dropReplaceDialog(filename, !isProject);
+  if (choice === 'open') await openNew();
+  else if (choice === 'tc') await applyTimecodesFromText(text, filename);
+  // 'cancel' 不操作
+}
+
+// 拖入冲突询问弹窗：返回 'open' | 'tc' | 'cancel'
+function dropReplaceDialog(filename, allowTc) {
+  return new Promise((resolve) => {
+    const dlg = $('dropDialog');
+    $('dropMsg').textContent =
+      `当前已有字幕内容，拖入的文件「${filename}」含时间码。你要如何导入？`;
+    $('dropOnlyTc').hidden = !allowTc;
+    dlg.hidden = false;
+    const cleanup = () => {
+      $('dropOpenNew').removeEventListener('click', onOpen);
+      $('dropOnlyTc').removeEventListener('click', onTc);
+      $('dropCancel').removeEventListener('click', onCancel);
+      dlg.hidden = true;
+    };
+    const onOpen = () => { cleanup(); resolve('open'); };
+    const onTc = () => { cleanup(); resolve('tc'); };
+    const onCancel = () => { cleanup(); resolve('cancel'); };
+    $('dropOpenNew').addEventListener('click', onOpen);
+    $('dropOnlyTc').addEventListener('click', onTc);
+    $('dropCancel').addEventListener('click', onCancel);
+  });
 }
 
 function closeSegDialog() {
@@ -1673,14 +1781,15 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files?.[0];
   if (!f) return;
-  const text = await f.text();
-  if (f.name.toLowerCase().endsWith('.gsub')) {
-    openProjectFromText(text, f.name);
+  const filename = f.name;
+  const lower = filename.toLowerCase();
+  // Word 文档前端无法解析，提示用菜单导入（桌面版才有 Python 解析能力）
+  if (lower.endsWith('.docx')) {
+    setStatus(isPyWebView() ? 'Word 文档请通过「导入字幕」菜单选择导入' : 'Word 智能导入仅桌面版（.exe）支持');
     return;
   }
-  currentSourcePath = f.name;
-  const r = await loadText(text);
-  setStatus(`已加载文件（${r.count} 条${r.bilingual ? ' · 双语' : ''}）`);
+  const text = await f.text();
+  handleDropFile(text, filename, lower.endsWith('.gsub'));
 });
 
 // 翻译面板（点击「翻译」按钮展开 / 收起，与查找替换一致）
@@ -1888,15 +1997,27 @@ wireFormatBtn('fmtUnderline', 'underline');
 // 程序配置：窗口大小 / 表格间距 / 文件打开位置 / 翻译引擎 由 Python 端读写 config.json
 // --------------------------------------------------------------------------
 let cellPad = 4;
+let cellFont = 14;
 // 字数上限：原文列 / 译文列允许的纯文字长度（0 = 不限制），超长单元格标红。
 let srcLenLimit = 0;
 let tgtLenLimit = 0;
 
+// 仅设置行间距（兼容旧版仅存间距配置的回退；字号调整会覆盖此值）
 function applyCellPadding(pad) {
   cellPad = Math.max(0, Math.min(20, pad | 0));
   document.documentElement.style.setProperty('--cell-pad', cellPad + 'px');
-  const pv = $('padVal');
-  if (pv) pv.textContent = String(cellPad);
+}
+
+// 设置原文 / 译文单元格字体大小；行间距随字号按比例自动调整（默认 14px → 4px 间距）
+function applyCellFontSize(fs) {
+  cellFont = Math.max(8, Math.min(48, fs | 0));
+  document.documentElement.style.setProperty('--cell-font-size', cellFont + 'px');
+  const pad = Math.max(2, Math.round(cellFont * 0.3));
+  document.documentElement.style.setProperty('--cell-pad', pad + 'px');
+  const sel = $('fontSizeVal');
+  if (sel) sel.value = String(cellFont);
+  // 字号变化后单元格内容高度变了，重算所有行高度，避免放大后的文字被旧高度裁切
+  if (editor && typeof editor.autoGrowAll === 'function') editor.autoGrowAll();
 }
 
 function saveConfig(patch) {
@@ -1921,8 +2042,10 @@ async function loadConfig() {
     $('syncSplit').checked = syncSplit;
     editor.setSyncSplit(syncSplit);
     saveConfig({ syncSplitMode: syncSplit });
-    if (typeof cfg?.table?.cell_padding === 'number') {
-      applyCellPadding(cfg.table.cell_padding);
+    if (typeof cfg?.table?.font_size === 'number') {
+      applyCellFontSize(cfg.table.font_size);
+    } else if (typeof cfg?.table?.cell_padding === 'number') {
+      applyCellPadding(cfg.table.cell_padding); // 旧版配置仅有间距时直接沿用
     }
     // EDIUS 工程帧率记忆：下次打开 EDIUS 文件时默认选中上次的选择
     if (typeof cfg?.ediusFps === 'number') {
@@ -1950,19 +2073,23 @@ async function loadConfig() {
     if (lockChk) lockChk.checked = lockSrc;
     editor.setSourceLocked(lockSrc);
     saveConfig({ lockSourceMode: lockSrc });
+    // 护眼模式：从配置读取上次开关状态，进入时恢复（柔和草绿主题）
+    const eyeOn = typeof cfg?.eyeCareMode === 'boolean' ? cfg.eyeCareMode : false;
+    document.body.classList.toggle('eye-care', eyeOn);
+    const ecBtn = $('eyeCareBtn');
+    if (ecBtn) ecBtn.classList.toggle('active', eyeOn);
   } catch (e) {
     /* 忽略：使用默认值 */
   }
 }
 
-// 表格间距 +/− 调节
-$('padMinus').addEventListener('click', () => {
-  applyCellPadding(cellPad - 1);
-  saveConfig({ table: { cell_padding: cellPad } });
-});
-$('padPlus').addEventListener('click', () => {
-  applyCellPadding(cellPad + 1);
-  saveConfig({ table: { cell_padding: cellPad } });
+// 字号调节：改变原文 / 译文单元格字体大小，行间距随之自动调整，并记忆到配置
+$('fontSizeVal').addEventListener('change', () => {
+  const v = parseInt($('fontSizeVal').value, 10);
+  if (!isNaN(v)) {
+    applyCellFontSize(v);
+    saveConfig({ table: { font_size: cellFont } });
+  }
 });
 
 // 字数上限输入框：改变后即时套用并重绘超长标红，并记忆到配置。
@@ -2017,9 +2144,9 @@ function toggleOpenMenu(show) {
   openCaret.setAttribute('aria-expanded', String(willShow));
 }
 
-// 直接点击「打开」主按钮：默认打开项目文件（.gsub）
+// 直接点击「导入字幕」主按钮：自动判断文件类型导入
 $('openBtn').addEventListener('click', () => {
-  openProject();
+  importAuto();
 });
 
 openCaret.addEventListener('click', (e) => {
@@ -2032,12 +2159,8 @@ openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
     toggleOpenMenu(false);
     if (item.disabled) return; // 空表时「仅导入时码」等禁用项不响应
     const action = item.dataset.action;
-    if (action === 'srt') openSrt();
-    else if (action === 'txt') importTxt();
-    else if (action === 'docx') importDocx();
-    else if (action === 'seg') importSeg();
-    else if (action === 'tc') importTimecodes();
-    else openProject();
+    if (action === 'tc') importTimecodes();
+    else importAuto(); // 'auto' 及其它：自动判断文件类型导入
   });
 });
 
@@ -2137,6 +2260,16 @@ function setupAbout() {
   $('aboutClose').addEventListener('click', close);
   dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
   dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+  // 护眼模式：切换柔和草绿主题，并记忆到配置（下次启动自动恢复）
+  const eyeCareBtn = $('eyeCareBtn');
+  if (eyeCareBtn) {
+    eyeCareBtn.addEventListener('click', () => {
+      const on = document.body.classList.toggle('eye-care');
+      eyeCareBtn.classList.toggle('active', on);
+      saveConfig({ eyeCareMode: on });
+    });
+  }
 
   // —— 智能分句导入弹窗 ——
   const segDlg = $('segDialog');

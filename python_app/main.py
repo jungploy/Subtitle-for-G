@@ -145,7 +145,7 @@ PORT = 8011
 # --------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     'window': {'width': 1100, 'height': 720, 'x': None, 'y': None, 'maximized': False},
-    'table': {'cell_padding': 4},
+    'table': {'cell_padding': 4, 'font_size': 14},
     'lengthLimits': {'source': 0, 'target': 0},
     'syncSplitMode': False,
     'lockSourceMode': False,
@@ -951,6 +951,54 @@ class Api:
         cfg['last_dir'] = os.path.dirname(path)
         _save_config(cfg)
         return {'path': path, 'text': text}
+
+    def open_file_auto(self):
+        """统一「导入字幕」入口：自动判断文件类型，无需用户预先选择导入方式。
+        支持：.gsub（项目）/ .docx（智能导入）/ .srt .vtt .ass .txt（字幕）。
+        返回 {kind, path, text|items}，前端据此分发：
+          kind='project'  -> 打开项目（text 为项目文本）
+          kind='docx'     -> 智能导入（items 为解析后的条目）
+          kind='subtitle' -> 字幕文本（text，前端 loadText 内部再识别具体格式）
+          kind='error'    -> 读取失败（error 含原因）
+        """
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=init_dir,
+                allow_multiple=False,
+                file_types=(
+                    '字幕 / 项目 / 文档 (*.gsub;*.srt;*.vtt;*.ass;*.txt;*.docx)',
+                    '字幕项目 (*.gsub)',
+                    '字幕文件 (*.srt;*.vtt;*.ass;*.txt)',
+                    'Word 文档 (*.docx)',
+                    '所有文件 (*.*)',
+                ),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        ext = os.path.splitext(path)[1].lower()
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        try:
+            if ext == '.gsub':
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+                return {'kind': 'project', 'path': path, 'text': text}
+            if ext == '.docx':
+                items = _parse_docx(path)
+                return {'kind': 'docx', 'path': path, 'items': items}
+            # 其余（srt/vtt/ass/txt 等）作为字幕文本读取
+            text = _read_text_auto(path)
+            return {'kind': 'subtitle', 'path': path, 'text': text}
+        except Exception as e:
+            return {'kind': 'error', 'path': path, 'error': str(e)}
 
     def save_project(self, default_name, contents):
         win = webview.windows[0]
