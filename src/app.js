@@ -1,7 +1,7 @@
 // src/app.js
 import { parseSRT } from './srt.js';
 import { parseAss } from './ass.js';
-import { parseEdius, isEdius } from './edius.js';
+import { parseEdius, isEdius, fpsToValue, ediusProbeFps } from './edius.js';
 import { createEditor } from './editor.js';
 import { translateLines, translateDocument, normalizeTranslationLine, alignSegments } from './translate.js';
 import { serializeProject, parseProject } from './project.js';
@@ -378,16 +378,27 @@ function hideLoading() {
   $('loadingOverlay').hidden = true;
 }
 
-// 打开 EDIUS 文件时让用户选择工程帧率（23.976 / 24 / 25），并记忆到 config。
+// 让用户选择 EDIUS 工程帧率，并记忆到 config（及内存 ediusFpsDefault，供导出默认）。
+// opts：可选的帧率标签数组（字符串），默认 ['23.976','24','25']。
+//   - 导入时传默认的 3 项（29.976 靠帧号自动识别，无需列入）；
+//   - 导出时传 ['23.976','24','25','29.976'] 共 4 项。
 // 返回选中的帧率数值；理论上不可关闭，保留 null 作为兜底。
 let ediusFpsDefault = 25;
 
-function askEdiusFps() {
+function askEdiusFps(opts) {
+  const options = opts || ['23.976', '24', '25'];
   return new Promise((resolve) => {
     const dlg = $('fpsDialog');
-    const buttons = Array.from(dlg.querySelectorAll('.fps-btn'));
-    buttons.forEach((b) => {
-      b.classList.toggle('selected', parseFloat(b.dataset.fps) === ediusFpsDefault);
+    const container = $('fpsOptions');
+    container.innerHTML = ''; // 动态重建按钮，支持不同调用场景的帧率集合
+    const buttons = options.map((label) => {
+      const b = document.createElement('button');
+      b.className = 'fps-btn';
+      b.dataset.fps = label;
+      b.textContent = label + ' fps';
+      b.classList.toggle('selected', parseFloat(label) === ediusFpsDefault);
+      container.appendChild(b);
+      return b;
     });
     dlg.hidden = false;
     const cleanup = () => {
@@ -413,10 +424,13 @@ async function loadText(text) {
   await showLoading('正在解析字幕…');
   let result;
   if (isEdius(text)) {
-    // 先隐藏解析进度遮罩（其 z-index 高于模态框），再让用户选择工程帧率
+    // 先隐藏解析进度遮罩（其 z-index 高于模态框），再确认工程帧率
     hideLoading();
-    const fps = await askEdiusFps();
+    // 自动识别 29.976（帧号≥25 即可判定），免弹窗；其余帧率仍需用户确认
+    let fps = ediusProbeFps(text);
+    if (fps == null) fps = await askEdiusFps(['23.976', '24', '25']);
     if (fps == null) return { count: 0, bilingual: false };
+    ediusFpsDefault = fps; // 记忆（供导出默认帧率保持一致）
     result = parseEdius(text, fps);
   } else {
     const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
@@ -789,15 +803,16 @@ function buildVtt(plain, content) {
 
 // EDIUS 导出：把 SRT 时间码（HH:MM:SS,mmm）反算回 EDIUS 时间码（HH:MM:SS:FF，FF=帧号）。
 // 必须与导入 ediusToSrt 严格互逆：导入用 ms=round(FF/fps*1000)，故导出用 FF=round(小数秒×fps)，
-// 且全程使用真实 fps（如 23.976）而非名义帧率，否则 23.976 与 24 会错位（已踩坑）。
+// 且全程使用真实 fps（如 29.976 用 30000/1001）而非名义帧率，否则会错位（已踩坑）。
 function srtToEdius(ts, fps) {
+  const rate = fpsToValue(fps);
   const m = /^(\d{1,2}):(\d{2}):(\d{2}),(\d{3})$/.exec((ts || '').trim());
   if (!m) return '00:00:00:00';
   const H = +m[1], M = +m[2], S = +m[3], MS = +m[4];
   const fracSeconds = H * 3600 + M * 60 + S + MS / 1000;
   const sInt = Math.floor(fracSeconds);
-  let frame = Math.round((fracSeconds - sInt) * fps);
-  const nominalFps = Math.round(fps); // 仅用于进位保护
+  let frame = Math.round((fracSeconds - sInt) * rate);
+  const nominalFps = Math.round(rate); // 仅用于进位保护
   // 进位保护：round 可能使帧号达到名义帧率上限（如 0.979×24≈24），此时进 1 秒、帧号归零
   let sec = sInt;
   if (frame >= nominalFps) { frame = 0; sec += 1; }
@@ -863,10 +878,10 @@ function exportSubtitles(format, content, fps) {
 // 直接导出（无弹窗）：按指定内容(content)与格式(format)生成文本并保存。
 // content ∈ {source 原文, target 译文, bilingual 原文+译文双行}；format ∈ {txt, srt, vtt, edius}
 async function doExportDirect(content, format) {
-  // EDIUS 导出需要工程帧率：复用导入时的帧率选择框（与导入一致，且会记忆默认）。
+  // EDIUS 导出需要工程帧率：弹出帧率选择框（含 29.976，共 4 项），并记忆默认。
   let fps = null;
   if (format === 'edius') {
-    fps = await askEdiusFps();
+    fps = await askEdiusFps(['23.976', '24', '25', '29.976']);
     if (fps == null) return; // 用户取消帧率选择
   }
   const text = exportSubtitles(format, content, fps);

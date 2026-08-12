@@ -9,21 +9,34 @@
 // 编码常见为 UTF-16LE（带 BOM），由后端 open_file 负责正确解码后传入。
 //
 // 内部时间模型统一使用 SRT 的 HH:MM:SS,mmm（毫秒），因此帧需换算成毫秒。
-// EDIUS 字幕时间码基于工程帧率；帧率由用户在「打开 EDIUS 文件」时从弹窗选择
-// （23.976 / 24 / 25 fps），并记忆到 config，避免固定帧率造成的时码偏移。
+// EDIUS 字幕时间码基于工程帧率（23.976 / 24 / 25 / 29.976 fps）。
+// 时间码分隔符可能是冒号「:」或分号「;」（EDIUS 部分导出用「HH:MM:SS;FF」），两种都识别。
+// 导入时若帧号达到 25（仅 29.976 帧率才有 0..29）即自动判定为 29.976，无需弹窗询问；
+// 其余帧率（23.976 / 24 / 25）无法仅靠帧号唯一确定，仍需弹窗确认。
 
 import { normalizeImportText } from './textnorm.js';
 
+// 帧率标准化：NTSC 非整数帧率用精确分数（24000/1001、30000/1001），
+// 否则逐帧换算会与 EDIUS 实际写入的时码产生累积偏差。
+export function fpsToValue(fps) {
+  const s = String(fps);
+  if (s === '23.976') return 24000 / 1001;
+  if (s === '29.976' || s === '29.97') return 30000 / 1001;
+  const v = parseFloat(s);
+  return isFinite(v) && v > 0 ? v : 25;
+}
+
 // 单条 EDIUS 行：起始时码 结束时码 文本
-// 行尾允许可选的 \r（部分文件 / 跨平台换行残留），避免误判整行不匹配。
+// 时码分隔符兼容「:」与「;」；行尾允许可选的 \r（部分文件 / 跨平台换行残留）。
 const LINE_RE =
-  /^\s*(\d{1,2}):(\d{2}):(\d{2}):(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2}):(\d{2})\s*(.*)\r?$/;
+  /^\s*(\d{1,2})[:;](\d{2})[:;](\d{2})[:;](\d{2})\s+(\d{1,2})[:;](\d{2})[:;](\d{2})[:;](\d{2})\s*(.*)\r?$/;
 
 // 把 HH:MM:SS:FF（帧）转成 HH:MM:SS,mmm（毫秒），按给定的工程帧率 fps 换算。
 function ediusToSrt(h, m, s, f, fps) {
+  const rate = fpsToValue(fps);
   const p2 = (n) => String(n).padStart(2, '0');
   const p3 = (n) => String(n).padStart(3, '0');
-  const ms = Math.round((f / fps) * 1000);
+  const ms = Math.round((f / rate) * 1000);
   return `${p2(h)}:${p2(m)}:${p2(s)},${p3(ms)}`;
 }
 
@@ -75,4 +88,17 @@ export function parseEdius(text, fps = 25) {
   }
   const bilingual = items.some((it) => (it.target || '').trim().length > 0);
   return { items, bilingual };
+}
+
+// 帧率自动探测：扫描所有行的帧号（起始、结束各取一个），
+// 若帧号达到 25（仅 29.976 帧率才有 0..29）即可确定工程帧率为 29.976，
+// 导入时无需再弹窗询问。其余帧率（23.976 / 24 / 25 帧号 ≤24）返回 null，需弹窗确认。
+export function ediusProbeFps(text) {
+  if (!text) return null;
+  let maxFrame = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const m = LINE_RE.exec(line);
+    if (m) maxFrame = Math.max(maxFrame, +m[4], +m[8]);
+  }
+  return maxFrame >= 25 ? 29.976 : null;
 }
