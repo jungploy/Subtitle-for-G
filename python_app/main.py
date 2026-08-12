@@ -944,6 +944,7 @@ if __name__ == '__main__':
         'js_api': api,
         'width': win_w,
         'height': win_h,
+        'min_size': (900, 600),
     }
     # 仅当同时记录了有效的 x、y 时才还原窗口位置（否则由系统居中放置）
     if isinstance(win_x, (int, float)) and isinstance(win_y, (int, float)):
@@ -1028,12 +1029,19 @@ if __name__ == '__main__':
                 from System.Windows.Forms import (
                     Application, MessageBox, MessageBoxButtons, MessageBoxIcon, DialogResult,
                 )
+                from System.Drawing import Size
             except Exception:
                 return
             try:
                 while Application.OpenForms.Count == 0:
                     threading.Event().wait(0.2)
                 form = Application.OpenForms[0]
+                # 强制最小窗口尺寸：pywebview 的 min_size 在 WebView2 后端偶发不生效，
+                # 直接在 WinForms 层设置 MinimumSize 最可靠，拖动到小于该尺寸会被系统自动拦住。
+                try:
+                    form.MinimumSize = Size(900, 600)
+                except Exception:
+                    pass
 
                 def _handler(sender, args):
                     _persist_geometry()
