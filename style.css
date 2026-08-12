@@ -965,6 +965,10 @@ thead th.resizing .col-resizer {
 .modal-body {
   padding: 14px 16px;
 }
+#confirmMsg {
+  white-space: pre-line;
+  line-height: 1.5;
+}
 .export-group {
   margin-bottom: 14px;
 }

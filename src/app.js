@@ -631,6 +631,22 @@ async function applyTimecodesFromText(text, path) {
 
   if (!parsed.length) { setStatus('所选文件未解析出任何时码'); return; }
 
+  // 行数不一致：台本大概率不是同一批字幕，替换后的时码会对应不上，必须先弹窗确认
+  if (parsed.length !== current.length) {
+    const diff =
+      parsed.length < current.length
+        ? `文件仅 ${parsed.length} 条，当前列表 ${current.length} 条——多出 ${current.length - parsed.length} 行的时码将保持原样不被替换。`
+        : `文件共 ${parsed.length} 条，当前列表 ${current.length} 条——超出 ${parsed.length - current.length} 条无法对应（会被忽略）。`;
+    const ok = await confirmDialog(
+      `所选时码文件的条数（${parsed.length}）与当前列表（${current.length}）不一致。\n${diff}\n\n行数不一致通常意味着两份台本不是同一批字幕，按行序替换后时码很可能对不上。\n\n是否仍要按行序替换？`,
+      { title: '行数不一致', okText: '仍要替换', danger: false }
+    );
+    if (!ok) {
+      setStatus('已取消：时码文件与当前列表行数不一致，未做任何替换');
+      return;
+    }
+  }
+
   let replaced = 0;
   const updated = current.map((it, i) => {
     if (i < parsed.length && parsed[i].start && parsed[i].end) {
@@ -1042,12 +1058,20 @@ $('swapSides').addEventListener('click', () => {
 const confirmOverlay = $('confirmOverlay');
 
 // 通用确认弹窗，返回 Promise<boolean>（确定=true / 取消或 Esc=false）
-function confirmDialog(message) {
+// opts: { title, okText, danger } —— 不传则保持 HTML 默认（「确认删除」标题 + 「删除」红色按钮），向后兼容删除场景
+function confirmDialog(message, opts = {}) {
   return new Promise((resolve) => {
     const msg = $('confirmMsg');
+    const head = $('confirmHead');
     const okBtn = $('confirmOk');
     const cancelBtn = $('confirmCancel');
     if (msg) msg.textContent = message;
+    if (head) head.textContent = opts.title || '确认删除';
+    if (okBtn) {
+      okBtn.textContent = opts.okText || '删除';
+      // 默认红色危险按钮；传入 danger:false 时改为普通主色（如「仍要替换」）
+      okBtn.className = opts.danger === false ? 'primary' : 'primary danger';
+    }
     let done = false;
     const finish = (val) => {
       if (done) return;
