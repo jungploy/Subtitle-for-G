@@ -154,9 +154,13 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     return { td, div };
   }
 
+  // 固定行高：每行高度统一为 ROW_HEIGHT（约两行字幕），单行内容也占此高度，
+  // 内容超长（超过两行）时允许向上撑高，避免裁切。
+  const ROW_HEIGHT = 46;
   function autoGrow(el) {
     el.style.height = 'auto';
-    el.style.height = el.scrollHeight + 'px';
+    const h = Math.max(el.scrollHeight, ROW_HEIGHT);
+    el.style.height = h + 'px';
   }
 
   function makeRow(i, it) {
