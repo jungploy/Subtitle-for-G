@@ -7,6 +7,7 @@ import { translateLines, translateDocument, normalizeTranslationLine, alignSegme
 import { serializeProject, parseProject } from './project.js';
 import { plainText, renderRich, replaceRich } from './rich.js';
 import { normalizeImportText } from './textnorm.js';
+import { segmentBlocks } from './segment.js';
 
 // 编辑会话快照：进入单元格编辑（focus）时记下修改前的整表状态，
 // 失焦（blur）时若确有改动则生成一条「编辑」修改记录；离散操作（互换/替换/翻译）
@@ -112,11 +113,28 @@ function refreshWindowTitle() {
   }
 }
 
-// 表格内容状态：空表时「保存项目」按钮禁用，并通知后端关闭时是否弹确认
+// 表格内容状态：空表时，凡是「作用于已有字幕内容」的功能全部禁用（置灰且不可点），
+// 避免点了没反应 / 误操作；有内容时恢复可用。
+// 说明：导入类（srt/txt/docx/seg）、打开项目、插入空白行、以及各项配置
+// （锁定原文 / 同步断句 / 字数上限 / 间距 / 关于）都属于「可创建内容」或「纯配置」，
+// 空表时仍可用，不在禁用之列。
+const NEEDS_CONTENT_SELECTOR = [
+  '#saveProject',                       // 保存项目（空表无意义）
+  '#openMenu [data-action="tc"]',       // 仅导入时码（需有行才能替换时码）
+  '#saveMenu [data-export]',            // 导出原文/译文/全部（无内容可导出）
+  '#saveMenu [data-action="saveAs"]',   // 另存为（空项目无保存意义）
+  '#findReplaceToggle',                 // 查找替换（无内容可查）
+  '#translateToggle',                   // 翻译（无内容可译）
+  '#swapSides',                         // 交换文本（无内容可交换）
+  '#fmtBold', '#fmtItalic', '#fmtUnderline', // 字体样式（无选中可改）
+  '#deleteRows',                        // 删除行（无行可删）
+].join(', ');
+
 function updateContentState() {
   const has = editor.getItems().length > 0;
-  const btn = $('saveProject');
-  if (btn) btn.disabled = !has;
+  document.querySelectorAll(NEEDS_CONTENT_SELECTOR).forEach((el) => {
+    el.disabled = !has;
+  });
   if (isPyWebView()) {
     try { window.pywebview.api.set_has_content(has); } catch (e) {}
   }
@@ -167,7 +185,11 @@ function itemsEqual(a, b) {
 
 // 计算一段「显示用 HTML」的纯文字长度（去掉标签与换行，只数可见字符）
 function textLength(html) {
-  return plainText(html || '').replace(/\r?\n/g, '').length;
+  // 字数按「单行」计：双行单元格（含 <br>）取各行纯文字长度的最大值，而非整格合计。
+  const lines = plainText(html || '').split('\n');
+  let m = 0;
+  for (const ln of lines) if (ln.length > m) m = ln.length;
+  return m;
 }
 
 // 底部状态栏：选中行的原文 / 译文文字长度
@@ -388,17 +410,23 @@ async function applyImportedItems(rawItems, msg) {
     source: toHtml(it.source || ''),
     target: toHtml(it.target || ''),
   }));
-  await showLoading('正在导入…');
-  await editor.setItemsAsync(items, setLoadingProgress);
-  updateStats();
-  clearHistory();
-  updateSelectionStats();
-  dirty = true;
-  pushProjectBuffer();
-  hideLoading();
-  refreshWindowTitle();
-  updateContentState();
-  setStatus(msg);
+  await setBusy(true);
+  try {
+    await showLoading('正在导入…');
+    await editor.setItemsAsync(items, setLoadingProgress);
+    updateStats();
+    clearHistory();
+    updateSelectionStats();
+    dirty = true;
+    pushProjectBuffer();
+    hideLoading();
+    refreshWindowTitle();
+    updateContentState();
+    setStatus(msg);
+  } finally {
+    hideLoading();
+    await setBusy(false);
+  }
 }
 
 // —— 加载进度遮罩 ——
@@ -419,6 +447,14 @@ function setLoadingProgress(done, total) {
 }
 function hideLoading() {
   $('loadingOverlay').hidden = true;
+}
+
+// 通知后端「导入进行中」，关闭时据此阻止静默关闭（避免导入结果丢失）。
+// 浏览器环境下无原生关闭拦截，直接空操作。
+async function setBusy(v) {
+  if (isPyWebView()) {
+    try { await window.pywebview.api.set_busy(v); } catch (e) {}
+  }
 }
 
 // 让用户选择 EDIUS 工程帧率，并记忆到 config（及内存 ediusFpsDefault，供导出默认）。
@@ -464,38 +500,44 @@ async function loadText(text) {
   //   1) EDIUS（HH:MM:SS:FF 起始 结束 文本，常见于 EDIUS 导出的 .txt）
   //   2) ASS（Advanced SubStation Alpha）：含 [Script Info] / [Events] 与 Dialogue: 行
   //   3) 其余走 SRT / 字幕通用解析
-  await showLoading('正在解析字幕…');
-  let result;
-  if (isEdius(text)) {
-    // 先隐藏解析进度遮罩（其 z-index 高于模态框），再确认工程帧率
+  await setBusy(true);
+  try {
+    let result;
+    if (isEdius(text)) {
+      // 先隐藏解析进度遮罩（其 z-index 高于模态框），再确认工程帧率
+      hideLoading();
+      // 自动识别 29.976（帧号≥25 即可判定），免弹窗；其余帧率仍需用户确认
+      let fps = ediusProbeFps(text);
+      if (fps == null) fps = await askEdiusFps(['23.976', '24', '25']);
+      if (fps == null) return { count: 0, bilingual: false };
+      ediusFpsDefault = fps; // 记忆（供导出默认帧率保持一致）
+      result = parseEdius(text, fps);
+    } else {
+      const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
+      result = isAss ? parseAss(text) : parseSRT(text);
+    }
+    const { items, bilingual } = result;
+    const htmlItems = items.map((it) => ({
+      ...it,
+      source: toHtml(it.source),
+      target: toHtml(it.target),
+    }));
+    // 分块建表并回报进度，避免大文件卡死
+    await showLoading('正在解析字幕…');
+    await editor.setItemsAsync(htmlItems, setLoadingProgress);
+    updateStats();
+    clearHistory();
+    updateSelectionStats();
+    dirty = true;
+    pushProjectBuffer();
     hideLoading();
-    // 自动识别 29.976（帧号≥25 即可判定），免弹窗；其余帧率仍需用户确认
-    let fps = ediusProbeFps(text);
-    if (fps == null) fps = await askEdiusFps(['23.976', '24', '25']);
-    if (fps == null) return { count: 0, bilingual: false };
-    ediusFpsDefault = fps; // 记忆（供导出默认帧率保持一致）
-    result = parseEdius(text, fps);
-  } else {
-    const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
-    result = isAss ? parseAss(text) : parseSRT(text);
+    refreshWindowTitle();
+    updateContentState();
+    return { count: items.length, bilingual };
+  } finally {
+    hideLoading();
+    await setBusy(false);
   }
-  const { items, bilingual } = result;
-  const htmlItems = items.map((it) => ({
-    ...it,
-    source: toHtml(it.source),
-    target: toHtml(it.target),
-  }));
-  // 分块建表并回报进度，避免大文件卡死
-  await editor.setItemsAsync(htmlItems, setLoadingProgress);
-  updateStats();
-  clearHistory();
-  updateSelectionStats();
-  dirty = true;
-  pushProjectBuffer();
-  hideLoading();
-  refreshWindowTitle();
-  updateContentState();
-  return { count: items.length, bilingual };
 }
 
 // 上传本地文件（浏览器回退）：按扩展名路由 —— .gsub 走项目解析，其余走字幕解析
@@ -507,6 +549,21 @@ $('fileInput').addEventListener('change', async (e) => {
   if (pendingTimecodeImport) {
     pendingTimecodeImport = false;
     await applyTimecodesFromText(text, f.name);
+    e.target.value = '';
+    return;
+  }
+  // 智能分句导入（浏览器回退）：.txt 按行拆成段落块，进入预览弹窗
+  if (pendingSegImport) {
+    pendingSegImport = false;
+    if (!f.name.toLowerCase().endsWith('.txt')) {
+      setStatus('浏览器环境下智能分句仅支持 .txt（Word 请在桌面版 .exe 中使用）');
+      e.target.value = '';
+      return;
+    }
+    const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    segBlocks = lines;
+    currentSourcePath = f.name;
+    openSegDialog();
     e.target.value = '';
     return;
   }
@@ -607,6 +664,124 @@ function importDocx() {
   }
 }
 
+// 智能分句导入：先弹窗预览，再按「标点 + 最小长度」规则把大段文本切成字幕句。
+// 桌面版（.exe）走 Python 原生对话框读取 .docx/.txt 并返回段落块；其余环境回退隐藏 fileInput 读 .txt。
+let segBlocks = [];
+
+function importSeg() {
+  if (isPyWebView()) {
+    try {
+      return (async () => {
+        const r = await window.pywebview.api.import_seg();
+        if (!r) return;
+        if (r.error) { setStatus('智能分句导入失败：' + r.error); return; }
+        segBlocks = r.blocks || [];
+        if (!segBlocks.length) { setStatus('文件中没有可导入的文本内容'); return; }
+        currentSourcePath = r.path || '';
+        openSegDialog();
+      })().catch((e) => setStatus('导入失败：' + (e?.message || e)));
+    } catch (e) {
+      setStatus('导入失败：' + (e?.message || e));
+    }
+  } else {
+    pendingSegImport = true;
+    $('fileInput').click();
+  }
+}
+
+// 浏览器回退：隐藏 fileInput 取 .txt 后进入分句预览
+let pendingSegImport = false;
+
+function openSegDialog() {
+  const dlg = $('segDialog');
+  dlg.hidden = false;
+  renderSegPreview();
+}
+
+function closeSegDialog() {
+  $('segDialog').hidden = true;
+}
+
+function segOptionsFromUI() {
+  return {
+    minLen: Math.max(0, parseInt($('segMinLen').value, 10) || 0),
+    comma: $('segComma').checked,
+    period: $('segPeriod').checked,
+    semicolon: $('segSemicolon').checked,
+    colon: $('segColon').checked,
+    question: $('segQuestion').checked,
+    exclaim: $('segExclaim').checked,
+    keepParagraphs: $('segKeepParas').checked,
+  };
+}
+
+// 把配置里的分句设置回填到预览弹窗的各个控件（打开弹窗时的初始值）。
+function applySegSettingsToUI(s) {
+  if (!s) return;
+  const minEl = $('segMinLen');
+  if (minEl && typeof s.minLen === 'number') minEl.value = String(s.minLen);
+  const setChk = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
+  setChk('segComma', s.comma);
+  setChk('segPeriod', s.period);
+  setChk('segSemicolon', s.semicolon);
+  setChk('segColon', s.colon);
+  setChk('segQuestion', s.question);
+  setChk('segExclaim', s.exclaim);
+  setChk('segKeepParas', s.keepParagraphs);
+}
+
+function renderSegPreview() {
+  const opts = segOptionsFromUI();
+  const segs = segmentBlocks(segBlocks, opts);
+  $('segCount').textContent = `共 ${segs.length} 句`;
+  const btn = $('segImport');
+  if (btn) btn.textContent = `导入 (${segs.length} 句)`;
+  const box = $('segPreview');
+  box.innerHTML = '';
+  const maxShow = 300;
+  const show = segs.slice(0, maxShow);
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < show.length; i++) {
+    const div = document.createElement('div');
+    div.className = 'seg-line';
+    const idx = document.createElement('span');
+    idx.className = 'seg-idx';
+    idx.textContent = (i + 1) + '.';
+    const txt = document.createElement('span');
+    txt.className = 'seg-txt';
+    txt.textContent = show[i];
+    div.appendChild(idx);
+    div.appendChild(txt);
+    frag.appendChild(div);
+  }
+  box.appendChild(frag);
+  if (segs.length > maxShow) {
+    const more = document.createElement('div');
+    more.className = 'seg-more';
+    more.textContent = `… 仅预览前 ${maxShow} 句，导入时将处理全部 ${segs.length} 句`;
+    box.appendChild(more);
+  }
+}
+
+function doSegImport() {
+  const opts = segOptionsFromUI();
+  // 记忆本次断句设置，下次打开预览弹窗时沿用（无需每次重设）。
+  saveConfig({ segSettings: opts });
+  const segs = segmentBlocks(segBlocks, opts);
+  closeSegDialog();
+  if (!segs.length) { setStatus('没有可导出的句子'); return; }
+  const GAP = 3000;
+  let n = 0;
+  const items = segs.map((s) => ({
+    index: 0,
+    start: msToTimeJs(n * GAP),
+    end: msToTimeJs((n + 1) * GAP),
+    source: toHtml(s),
+    target: '',
+  }));
+  applyImportedItems(items, `已智能分句导入：${currentSourcePath}（${items.length} 句）`);
+}
+
 // 仅导入时码：用带时码的文件（EDIUS .txt / SRT / ASS 等）的时码，按行序替换当前列表的时码。
 // 文本与译文保持不变；当前列表为空则提示。文件名仅用于状态栏显示。
 // 浏览器回退时通过隐藏 fileInput 取文件，用 pendingTimecodeImport 标记用途。
@@ -652,61 +827,67 @@ async function applyTimecodesFromText(text, path) {
   const current = editor.getItems();
   if (!current.length) { setStatus('当前列表为空，无法替换时码'); return; }
 
-  // 解析时码（与 loadText 一致：EDIUS → ASS → SRT/VTT/纯文本）
-  let parsed;
-  if (isEdius(text)) {
-    let fps = ediusProbeFps(text);
-    if (fps == null) {
-      hideLoading();
-      fps = await askEdiusFps(['23.976', '24', '25']);
-      if (fps == null) return; // 用户取消帧率选择
+  await setBusy(true);
+  try {
+    // 解析时码（与 loadText 一致：EDIUS → ASS → SRT/VTT/纯文本）
+    let parsed;
+    if (isEdius(text)) {
+      let fps = ediusProbeFps(text);
+      if (fps == null) {
+        fps = await askEdiusFps(['23.976', '24', '25']);
+        if (fps == null) return; // 用户取消帧率选择
+      }
+      parsed = parseEdius(text, fps).items;
+    } else {
+      const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
+      parsed = (isAss ? parseAss(text) : parseSRT(text)).items;
     }
-    parsed = parseEdius(text, fps).items;
-  } else {
-    const isAss = /^\s*\[Script Info\]/im.test(text) || /^\s*Dialogue:/im.test(text);
-    parsed = (isAss ? parseAss(text) : parseSRT(text)).items;
-  }
 
-  if (!parsed.length) { setStatus('所选文件未解析出任何时码'); return; }
+    if (!parsed.length) { setStatus('所选文件未解析出任何时码'); return; }
 
-  // 行数不一致：台本大概率不是同一批字幕，替换后的时码会对应不上，必须先弹窗确认
-  if (parsed.length !== current.length) {
-    const diff =
-      parsed.length < current.length
-        ? `文件仅 ${parsed.length} 条，当前列表 ${current.length} 条——多出 ${current.length - parsed.length} 行的时码将保持原样不被替换。`
-        : `文件共 ${parsed.length} 条，当前列表 ${current.length} 条——超出 ${parsed.length - current.length} 条无法对应（会被忽略）。`;
-    const ok = await confirmDialog(
-      `所选时码文件的条数（${parsed.length}）与当前列表（${current.length}）不一致。\n${diff}\n\n行数不一致通常意味着两份台本不是同一批字幕，按行序替换后时码很可能对不上。\n\n是否仍要按行序替换？`,
-      { title: '行数不一致', okText: '仍要替换', danger: false }
-    );
-    if (!ok) {
-      setStatus('已取消：时码文件与当前列表行数不一致，未做任何替换');
-      return;
+    // 行数不一致：台本大概率不是同一批字幕，替换后的时码会对应不上，必须先弹窗确认
+    if (parsed.length !== current.length) {
+      const diff =
+        parsed.length < current.length
+          ? `文件仅 ${parsed.length} 条，当前列表 ${current.length} 条——多出 ${current.length - parsed.length} 行的时码将保持原样不被替换。`
+          : `文件共 ${parsed.length} 条，当前列表 ${current.length} 条——超出 ${parsed.length - current.length} 条无法对应（会被忽略）。`;
+      const ok = await confirmDialog(
+        `所选时码文件的条数（${parsed.length}）与当前列表（${current.length}）不一致。\n${diff}\n\n行数不一致通常意味着两份台本不是同一批字幕，按行序替换后时码很可能对不上。\n\n是否仍要按行序替换？`,
+        { title: '行数不一致', okText: '仍要替换', danger: false }
+      );
+      if (!ok) {
+        setStatus('已取消：时码文件与当前列表行数不一致，未做任何替换');
+        return;
+      }
     }
-  }
 
-  let replaced = 0;
-  const updated = current.map((it, i) => {
-    if (i < parsed.length && parsed[i].start && parsed[i].end) {
-      replaced++;
-      return { ...it, start: parsed[i].start, end: parsed[i].end };
+    await showLoading('正在导入时码…');
+    let replaced = 0;
+    const updated = current.map((it, i) => {
+      if (i < parsed.length && parsed[i].start && parsed[i].end) {
+        replaced++;
+        return { ...it, start: parsed[i].start, end: parsed[i].end };
+      }
+      return it;
+    });
+    editor.setItems(updated);
+    updateStats();
+    updateSelectionStats();
+    dirty = true;
+    pushProjectBuffer();
+
+    const name = path ? `（${path.split(/[\\/]/).pop()}）` : '';
+    let msg = `已用时码文件${name}替换 ${replaced} 条时码`;
+    if (parsed.length < current.length) {
+      msg += `；文件仅 ${parsed.length} 条，其余 ${current.length - parsed.length} 条时码未改动`;
+    } else if (parsed.length > current.length) {
+      msg += `；文件共 ${parsed.length} 条，超出当前列表的 ${parsed.length - current.length} 条已忽略`;
     }
-    return it;
-  });
-  editor.setItems(updated);
-  updateStats();
-  updateSelectionStats();
-  dirty = true;
-  pushProjectBuffer();
-
-  const name = path ? `（${path.split(/[\\/]/).pop()}）` : '';
-  let msg = `已用时码文件${name}替换 ${replaced} 条时码`;
-  if (parsed.length < current.length) {
-    msg += `；文件仅 ${parsed.length} 条，其余 ${current.length - parsed.length} 条时码未改动`;
-  } else if (parsed.length > current.length) {
-    msg += `；文件共 ${parsed.length} 条，超出当前列表的 ${parsed.length - current.length} 条已忽略`;
+    setStatus(msg);
+  } finally {
+    hideLoading();
+    await setBusy(false);
   }
-  setStatus(msg);
 }
 
 // 下载导出（浏览器回退）
@@ -741,6 +922,7 @@ function defaultProjectName() {
 
 // 用项目文本载入编辑器（被「打开项目」按钮与 .gsub 文件拖入/选择复用）
 async function openProjectFromText(text, name, path) {
+  await setBusy(true);
   try {
     const { items, meta } = parseProject(text);
     if (!items.length) {
@@ -771,6 +953,9 @@ async function openProjectFromText(text, name, path) {
   } catch (e) {
     hideLoading();
     setStatus('项目解析失败：' + (e.message || e));
+  } finally {
+    hideLoading();
+    await setBusy(false);
   }
 }
 
@@ -972,15 +1157,33 @@ function srtToEdius(ts, fps) {
   return `${p(hh)}:${p(mm)}:${p(s)}:${p(frame)}`;
 }
 
+// EDIUS 正文：把单元格里的 <br>（双行台本）转成 EDIUS 的「\\」行分隔符。
+// 双语时「原文各行为前段、译文各行为后段」整体用 \\ 连接；两侧行数不一致时短侧补空行，
+// 保证段数为偶数，使导入端（parseEdius 的中点切分）能准确还原双行结构。
+function ediusBody(it, content) {
+  const sLines = plainText(it.source || '').split('\n');
+  const tLines = plainText(it.target || '').split('\n');
+  if (content === 'source') return sLines.join('\\\\');
+  if (content === 'target') {
+    const tb = tLines.join('\\\\');
+    return tb || sLines.join('\\\\'); // 译文为空回退原文（与 txt/srt 导出一致）
+  }
+  // bilingual：两侧行数对齐到较大值，短侧补空串，保证偶数段
+  const n = Math.max(sLines.length, tLines.length);
+  while (sLines.length < n) sLines.push('');
+  while (tLines.length < n) tLines.push('');
+  return sLines.concat(tLines).join('\\\\');
+}
+
 // EDIUS 纯文本导出：每行「起始时码 结束时码 文本」。
-// 双语(content=bilingual)复用 exportLines 的「原文\\译文」单行分隔，与 EDIUS 导入格式一致；
+// 双语(content=bilingual)把原文/译文各自的双行（<br>）转为 \\ 行分隔符，与 EDIUS 双行导入格式一致；
 // 原文/译文分别只取对应列（译文为空回退原文，与 txt 导出行为一致）。
 function buildEdius(plain, content, fps) {
   const lines = [];
   for (const it of plain) {
     const start = srtToEdius(it.start || '00:00:00,000', fps);
     const end = srtToEdius(it.end || '00:00:00,000', fps);
-    const text = exportLines(it, content).join('\n');
+    const text = ediusBody(it, content);
     if (!text) continue;
     lines.push(`${start} ${end} ${text}`);
   }
@@ -1737,6 +1940,16 @@ async function loadConfig() {
       if (tEl) tEl.value = String(t);
       editor.setLengthLimits(s, t);
     }
+    // 智能分句导入设置记忆：下次打开预览弹窗时沿用上次的断句设置（不覆盖用户当次已有的改动，
+    // 仅作「打开弹窗时的初始值」；真正的持久化发生在 doSegImport 点击导入时）。
+    if (cfg?.segSettings) applySegSettingsToUI(cfg.segSettings);
+    // 「锁定原文」开关：从配置读取（缺省 false=不锁定），统一按钮高亮态与编辑器内部状态，
+    // 并写回配置，保证「UI / 引擎 / 配置」三者一致。
+    const lockSrc = typeof cfg?.lockSourceMode === 'boolean' ? cfg.lockSourceMode : false;
+    const lockChk = $('lockSource');
+    if (lockChk) lockChk.checked = lockSrc;
+    editor.setSourceLocked(lockSrc);
+    saveConfig({ lockSourceMode: lockSrc });
   } catch (e) {
     /* 忽略：使用默认值 */
   }
@@ -1782,6 +1995,15 @@ $('syncSplit').addEventListener('change', () => {
   saveConfig({ syncSplitMode: $('syncSplit').checked });
 });
 
+// 「锁定原文」开关：开启后左侧原文列只读（startEdit 对 source 直接返回），仅可编辑译文；
+// 状态持久化到配置。断句时若当前编辑的是译文，中间按回车会把后半段前置到下方译文单元格
+// （见 editor.js 的 splitAtCaret）。复选框勾选表示处于锁定态。
+$('lockSource').addEventListener('change', () => {
+  const on = $('lockSource').checked;
+  editor.setSourceLocked(on);
+  saveConfig({ lockSourceMode: on });
+});
+
 // --------------------------------------------------------------------------
 // 「打开」按钮下拉：默认（直接点击）打开项目文件，下拉可切换为打开 SRT / 字幕
 // --------------------------------------------------------------------------
@@ -1808,10 +2030,12 @@ openCaret.addEventListener('click', (e) => {
 openMenu.querySelectorAll('.dropdown-item').forEach((item) => {
   item.addEventListener('click', () => {
     toggleOpenMenu(false);
+    if (item.disabled) return; // 空表时「仅导入时码」等禁用项不响应
     const action = item.dataset.action;
     if (action === 'srt') openSrt();
     else if (action === 'txt') importTxt();
     else if (action === 'docx') importDocx();
+    else if (action === 'seg') importSeg();
     else if (action === 'tc') importTimecodes();
     else openProject();
   });
@@ -1843,6 +2067,7 @@ saveCaret.addEventListener('click', (e) => {
 
 saveMenu.querySelectorAll('.dropdown-item').forEach((item) => {
   item.addEventListener('click', () => {
+    if (item.disabled) return; // 空表时导出 / 另存为等禁用项不响应
     const action = item.dataset.action;
     const exp = item.dataset.export;
     const fmt = item.dataset.format;
@@ -1912,6 +2137,19 @@ function setupAbout() {
   $('aboutClose').addEventListener('click', close);
   dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
   dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+  // —— 智能分句导入弹窗 ——
+  const segDlg = $('segDialog');
+  ['segComma', 'segPeriod', 'segSemicolon', 'segColon', 'segQuestion', 'segExclaim', 'segKeepParas'].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener('change', renderSegPreview);
+  });
+  const segMin = $('segMinLen');
+  if (segMin) segMin.addEventListener('input', renderSegPreview);
+  $('segCancel').addEventListener('click', closeSegDialog);
+  $('segImport').addEventListener('click', doSegImport);
+  segDlg.addEventListener('click', (e) => { if (e.target === segDlg) closeSegDialog(); });
+  segDlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSegDialog(); });
   if (isPyWebView()) {
     fillVersion();
   } else {

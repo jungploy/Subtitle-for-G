@@ -50,6 +50,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
   let editingSide = null;    // 'source' | 'target'
   let editingIndex = -1;
   let syncSplit = false;     // 断句是否「原文/译文同步拆行」：true=同步，false=只拆当前编辑单元格（默认不勾选）
+  let srcLocked = false;     // 锁定原文：true=原文列不可编辑，仅可编辑译文
 
   // SRT 时间码 -> 毫秒
   function timeToMs(t) {
@@ -104,7 +105,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       onChange && onChange(items);
       // 实时更新当前单元格字数超限标红（setLengthLimits 已保证上限值最新）
       const limit = side === 'source' ? srcLimit : tgtLimit;
-      div.classList.toggle('over-limit', limit > 0 && div.textContent.length > limit);
+      div.classList.toggle('over-limit', limit > 0 && maxLineLength(div.innerHTML) > limit);
     });
     // 聚焦时仅记录当前单元格（供字体格式按钮使用）；不在此触发 onEditBegin，
     // 编辑会话只在「双击进入」或「focusCell / 上下键切换」时开始，避免单击即进入编辑。
@@ -188,6 +189,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
 
     const sourceEl = sourceCell.div;
     const targetEl = targetCell.div;
+    if (srcLocked) sourceEl.classList.add('locked');
     targetEl.dataset.placeholder = '在此输入翻译…';
 
     tr.addEventListener('mousedown', (e) => {
@@ -273,8 +275,8 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     if (!tr) return;
     const sEl = tr.querySelector('.source-line');
     const tEl = tr.querySelector('.target-line');
-    if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && sEl.textContent.length > srcLimit);
-    if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && tEl.textContent.length > tgtLimit);
+    if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && maxLineLength(sEl.innerHTML) > srcLimit);
+    if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && maxLineLength(tEl.innerHTML) > tgtLimit);
   }
 
   // 依据 selected / activeIndex 刷新行的选中态：所有 selected 行加 .selected，
@@ -331,6 +333,8 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
   function startEdit(i, side, caretMode, point) {
     const tr = tbody.children[i];
     if (!tr) return;
+    // 锁定原文模式下，左侧原文列不可编辑（仍是只读富文本）。
+    if (srcLocked && side === 'source') return;
     const sel = side === 'source' ? '.source-line' : '.target-line';
     const el = tr.querySelector(sel);
     if (!el) return;
@@ -468,9 +472,47 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
       return;
     }
     exitEdit();
+    const item = items[i];
+    // —— 锁定原文模式下，译文单元格中间按回车：后半段文本「加到下方同列（target）单元格的前面」 ——
+    // 与常规断句不同：不论下方译文是否为空，都把右半前置到下方译文单元格开头；下方行不存在则新建一行承载。
+    // （原文处于锁定态，下方行的原文列不做任何改动。）
+    if (srcLocked && side === 'target') {
+      const before = items.map((it) => ({ ...it }));
+      item.target = trimHtml(left, { left: false, right: true });
+      const r = trimHtml(right, { left: true, right: false });
+      const hasBelow = i + 1 < items.length;
+      if (hasBelow) {
+        const belowT = items[i + 1].target || '';
+        // 下方译文已有内容：右半末尾补一个空格，避免与下方文字粘连（如 "challenge.Surviving" → "challenge. Surviving"）
+        items[i + 1].target = plainText(belowT).trim() ? r + ' ' + belowT : r + belowT;
+      } else {
+        const newItem = { index: 0, start: '', end: '', source: '', target: r };
+        const sMs = timeToMs(item.start);
+        const eMs = timeToMs(item.end);
+        if (sMs < eMs) {
+          const mid = Math.round((sMs + eMs) / 2);
+          item.end = msToTime(mid);
+          newItem.start = msToTime(mid);
+          newItem.end = msToTime(eMs);
+        }
+        items.splice(i + 1, 0, newItem);
+        renumber();
+      }
+      onChange && onChange(items);
+      onStructuralChange && onStructuralChange(`拆分 第${i + 1}行 译文（后半段加到下方）`, before);
+      activeIndex = i + 1;
+      anchorIndex = i + 1;
+      selected = new Set([i + 1]);
+      refreshRow(i);
+      if (hasBelow) refreshRow(i + 1); else insertRowAfter(i);
+      highlightSelection();
+      paintRowFlags(i);
+      paintRowFlags(i + 1);
+      startEdit(i + 1, 'target', 'start');
+      return;
+    }
     // 拆分前快照必须放在「修改 items」之前捕获，否则撤销无法恢复到拆分前的样子。
     const before = items.map((it) => ({ ...it }));
-    const item = items[i];
     const otherSide = side === 'source' ? 'target' : 'source';
     // n：编辑侧左半里的换行数，用于另一侧同步拆分的行边界。
     const n = (plainText(left).match(/\n/g) || []).length;
@@ -577,7 +619,7 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
   }
 
   // Ctrl / Shift + Enter：在当前字幕单元格内插入换行（<br>），变成双行显示，
-  // 但不产生新的字幕行（仍是一条字幕）。
+  // 但不产生新的字幕行（仍是一条字幕）。换行后自动去除 <br> 前后两行的首尾空格。
   function insertLineBreak() {
     const el = editingEl;
     if (!el) return;
@@ -587,6 +629,8 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     range.deleteContents();
     const br = document.createElement('br');
     range.insertNode(br);
+    // 去除断行点两侧多余空格：上一行去尾随空白、下一行去前导空白。
+    trimAroundBr(br);
     const after = document.createRange();
     after.setStartAfter(br);
     after.collapse(true);
@@ -595,6 +639,36 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     items[editingIndex][editingSide] = el.innerHTML;
     onChange && onChange(items);
     autoGrow(el);
+  }
+
+  // 去除 <br> 前后的首尾空格：上一行（br 之前）去尾随空白，下一行（br 之后）去前导空白。
+  // 兼容富文本（<b>/<i>/<u> 等）：若相邻的是元素节点，则只清其最前/最后文本节点的边界空白。
+  function trimAroundBr(br) {
+    let prev = br.previousSibling;
+    while (prev && prev.nodeType === 3 && prev.textContent === '') prev = prev.previousSibling;
+    if (prev) {
+      if (prev.nodeType === 3) prev.textContent = prev.textContent.replace(/\s+$/, '');
+      else if (prev.nodeType === 1) trimEdgeText(prev, 'right');
+    }
+    let next = br.nextSibling;
+    while (next && next.nodeType === 3 && next.textContent === '') next = next.nextSibling;
+    if (next) {
+      if (next.nodeType === 3) next.textContent = next.textContent.replace(/^\s+/, '');
+      else if (next.nodeType === 1) trimEdgeText(next, 'left');
+    }
+  }
+
+  // 清掉元素节点最前（'left'）/ 最后（'right'）文本节点的边界空白。
+  function trimEdgeText(el, side) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    if (side === 'right') {
+      let last = null;
+      while (walker.nextNode()) last = walker.currentNode;
+      if (last) last.textContent = last.textContent.replace(/\s+$/, '');
+    } else {
+      const first = walker.nextNode();
+      if (first) first.textContent = first.textContent.replace(/^\s+/, '');
+    }
   }
 
   function setActive(i) {
@@ -675,6 +749,22 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     syncSplit = !!val;
   }
 
+  // 设置「锁定原文」开关：true=原文列不可编辑（startEdit 对 source 直接返回），
+  // 并立即给所有已渲染行的原文单元格打上 .locked 标记（灰显 + 禁止光标）。
+  function setSourceLocked(val) {
+    const on = !!val;
+    if (on && editingEl && editingSide === 'source') exitEdit();
+    srcLocked = on;
+    applySourceLock();
+  }
+  function applySourceLock() {
+    if (!tbody) return;
+    for (const tr of tbody.children) {
+      const sEl = tr.querySelector('.source-line');
+      if (sEl) sEl.classList.toggle('locked', srcLocked);
+    }
+  }
+
   // 字数上限：原文列 / 译文列允许的纯文字长度（0 = 不限制）。
   // 超过上限的单元格文字标红，提醒用户该条字幕过密。
   let srcLimit = 0;
@@ -687,28 +777,39 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     paintLengthFlags();
   }
 
+  // 计算单元格「单行」最大字数：以 <br> 为换行，取各行纯文字长度的最大值。
+  // 字数上限标红与状态栏字数都以此为准——双行单元格按单行计，而非整格合计。
+  function maxLineLength(html) {
+    const lines = plainText(html || '').split('\n');
+    let m = 0;
+    for (const ln of lines) if (ln.length > m) m = ln.length;
+    return m;
+  }
+
   // 依据当前上限遍历所有行，给超长的 source/target 单元格加 / 去 over-limit 标记（CSS 变红）。
   function paintLengthFlags() {
     if (!tbody) return;
     for (const tr of tbody.children) {
       const sEl = tr.querySelector('.source-line');
       const tEl = tr.querySelector('.target-line');
-      if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && sEl.textContent.length > srcLimit);
-      if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && tEl.textContent.length > tgtLimit);
+      if (sEl) sEl.classList.toggle('over-limit', srcLimit > 0 && maxLineLength(sEl.innerHTML) > srcLimit);
+      if (tEl) tEl.classList.toggle('over-limit', tgtLimit > 0 && maxLineLength(tEl.innerHTML) > tgtLimit);
     }
+  }
+
+  // 把第 i 行指定侧的富文本单元格内容设为 html 并自适应高度（applyTargets / setSource 共用）。
+  function setCellHtml(i, side, html) {
+    const tr = tbody.children[i];
+    if (!tr) return;
+    const el = tr.querySelector(side === 'source' ? '.source-line' : '.target-line');
+    if (!el) return;
+    el.innerHTML = html;
+    autoGrow(el);
   }
 
   // 翻译回填后刷新目标列
   function applyTargets() {
-    items.forEach((it, i) => {
-      const tr = tbody.children[i];
-      if (!tr) return;
-      const el = tr.querySelector('.target-line');
-      if (el) {
-        el.innerHTML = it.target || '';
-        autoGrow(el);
-      }
-    });
+    items.forEach((it, i) => setCellHtml(i, 'target', it.target || ''));
     paintLengthFlags();
   }
 
@@ -716,14 +817,8 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
   function setSource(i, val) {
     if (!items[i]) return;
     items[i].source = val;
-    const tr = tbody.children[i];
-    if (!tr) return;
-    const el = tr.querySelector('.source-line');
-    if (el) {
-      el.innerHTML = val;
-      autoGrow(el);
-      paintLengthFlags();
-    }
+    setCellHtml(i, 'source', val);
+    paintLengthFlags();
   }
 
   function clearMatch() {
@@ -860,5 +955,5 @@ export function createEditor(container, { onChange, onActiveChange, onEditBegin,
     return true;
   }
 
-  return { setItems, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit, setLengthLimits };
+  return { setItems, setItemsAsync, getItems, getActiveIndex, applyTargets, setSource, render, setMatch, clearMatch, swapSides, applyFormat, selectRow, insertRow, deleteRows, getSelectedIndices, setSyncSplit, setSourceLocked, setLengthLimits };
 }

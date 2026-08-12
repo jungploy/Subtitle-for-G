@@ -73,11 +73,22 @@ export function parseEdius(text, fps = 25) {
     const start = ediusToSrt(+m[1], +m[2], +m[3], +m[4], fps);
     const end = ediusToSrt(+m[5], +m[6], +m[7], +m[8], fps);
     let body = (m[9] || '').replace(/\s+$/, ''); // 去尾部空白
-    // 双语拆分：两个反斜杠分隔原文/译文；无分隔则整段作原文
-    let source = body;
+    // 双语 + 多行：以「双反斜杠 \\」作为「行分隔符」，把整段切成若干段。
+    //   - 段数为 1：无分隔，整段作原文（译文空）；
+    //   - 段数为偶数：前一半为原文（中文）、后一半为译文（英文）——既兼容单行（2 段），
+    //     也兼容双行（4 段：原文两行 + 译文两行）。行内用 \n 连接，导入后由 toHtml 转成 <br>；
+    //   - 段数为奇数（极少见）：退回旧的「首个 \\ 作为中英分隔」切法，保证不崩。
+    const segs = body.split(BS2);
+    let source = '';
     let target = '';
-    const sep = body.indexOf(BS2);
-    if (sep !== -1) {
+    if (segs.length === 1) {
+      source = segs[0];
+    } else if (segs.length % 2 === 0) {
+      const half = segs.length / 2;
+      source = segs.slice(0, half).join('\n');
+      target = segs.slice(half).join('\n');
+    } else {
+      const sep = body.indexOf(BS2);
       source = body.slice(0, sep);
       target = body.slice(sep + 2);
     }

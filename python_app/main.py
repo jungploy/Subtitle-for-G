@@ -148,10 +148,21 @@ DEFAULT_CONFIG = {
     'table': {'cell_padding': 4},
     'lengthLimits': {'source': 0, 'target': 0},
     'syncSplitMode': False,
+    'lockSourceMode': False,
     'wholeDocMode': False,
     'ediusFps': None,
     'provider': 'mymemory',
     'last_dir': '',
+    'segSettings': {
+        'minLen': 35,
+        'comma': True,
+        'period': True,
+        'semicolon': True,
+        'colon': True,
+        'question': True,
+        'exclaim': True,
+        'keepParagraphs': True,
+    },
 }
 
 
@@ -631,6 +642,32 @@ def _parse_docx(path):
     return _normalize_docx_items(items)
 
 
+def _docx_paragraphs(path):
+    """提取 .docx 的段落文本（已清理），供「智能分句导入」使用：
+    - 剔除空行与「人物名 + 职务」署名行；
+    - 全角标点转 ASCII、合并连续空格（保留断句标点，供前端按标点断句）。
+    返回纯文本段落列表（不做时间码分组，也不按句切分）。"""
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    root = ET.fromstring(xml)
+    body = root.find(f'{{{W}}}body')
+    if body is None:
+        body = root
+    out = []
+    for p in body.iter(f'{{{W}}}p'):
+        texts = [t.text or '' for t in p.iter(f'{{{W}}}t')]
+        s = ''.join(texts).strip()
+        if not s or _is_credit_line(s):
+            continue
+        s = _collapse_spaces(_normalize_cjk_punct(s))
+        out.append(s)
+    return out
+
+
 # --------------------------------------------------------------------------
 # 文本读取：按 BOM / 编码自动解码
 # --------------------------------------------------------------------------
@@ -662,6 +699,9 @@ class Api:
         # 表格当前是否有内容：前端在内容变化（导入 / 编辑 / 清空）时同步，
         # 供「关闭时弹确认」判断——有内容才询问，空表直接关。
         self._has_content = False
+        # 导入进行中标记：前端在「读取文件→建表」这段重活期间置 True，
+        # 供关闭判断——导入未完成时禁止关闭，避免导入结果被静默丢弃。
+        self._busy = False
 
     def get_version(self):
         return VERSION
@@ -692,6 +732,11 @@ class Api:
     def set_has_content(self, v):
         # 前端同步表格是否有内容，供关闭时弹确认判断
         self._has_content = bool(v)
+
+    def set_busy(self, v):
+        # 前端在导入进行中（读取文件 + 建表）置 True，导入结束置 False。
+        # 关闭时若仍为 True，则阻止关闭，防止导入结果丢失。
+        self._busy = bool(v)
 
     def translate(self, payload):
         lines = payload.get('lines', []) or []
@@ -843,6 +888,44 @@ class Api:
         cfg['last_dir'] = os.path.dirname(path)
         _save_config(cfg)
         return {'path': path, 'items': items}
+
+    def import_seg(self):
+        """智能分句导入：打开 .docx / .txt，仅返回原始段落块（blocks），
+        由前端弹窗预览并按「标点 + 最小长度」规则断句；不做时间码分组。
+        返回 {path, blocks:[str]}，出错时含 error。"""
+        win = webview.windows[0]
+        init_dir = _load_config().get('last_dir') or ''
+        holder = {}
+        def _show():
+            holder['res'] = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=init_dir,
+                allow_multiple=False,
+                file_types=(
+                    '文档与文本 (*.docx;*.txt)',
+                    'Word 文档 (*.docx)',
+                    '纯文本 (*.txt)',
+                    '所有文件 (*.*)',
+                ),
+            )
+        _run_on_ui(_show)
+        result = holder.get('res')
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        try:
+            if path.lower().endswith('.docx'):
+                blocks = _docx_paragraphs(path)
+            else:
+                text = _read_text_auto(path)
+                blocks = [ln.strip() for ln in re.split(r'\r?\n', text)]
+                blocks = [_collapse_spaces(_normalize_cjk_punct(ln)) for ln in blocks if ln.strip()]
+        except Exception as e:
+            return {'path': path, 'error': str(e), 'blocks': []}
+        cfg = _load_config()
+        cfg['last_dir'] = os.path.dirname(path)
+        _save_config(cfg)
+        return {'path': path, 'blocks': blocks}
 
     def open_project(self):
         win = webview.windows[0]
@@ -1003,8 +1086,51 @@ if __name__ == '__main__':
         _persist_geometry()
 
     def _on_closing():
-        _persist_geometry()
-        return True
+        # 窗口位置/尺寸持久化放到 try 里：即便此处异常，也不影响下面的关闭判断。
+        try:
+            _persist_geometry()
+        except Exception:
+            pass
+        # 正在导入文件：禁止关闭，避免导入结果被静默丢弃。
+        # 返回 False 取消关闭，并提示用户稍候导入完成。
+        if api._busy:
+            try:
+                from System.Windows.Forms import (
+                    MessageBox, MessageBoxButtons, MessageBoxIcon,
+                )
+                MessageBox.Show(
+                    '正在导入文件，请稍候导入完成后再关闭。',
+                    '请稍候',
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information,
+                )
+            except Exception:
+                pass
+            return False
+        # 表格为空：直接关闭，不做任何提示。
+        if not api._has_content:
+            return True
+        # 表格有内容：弹「是否保存为项目」确认（是 / 否 / 取消）。
+        # pywebview 的 closing 事件约定：订阅者返回 False 即取消关闭（阻止退出）。
+        try:
+            from System.Windows.Forms import (
+                MessageBox, MessageBoxButtons, MessageBoxIcon, DialogResult,
+            )
+            res = MessageBox.Show(
+                '字幕尚未保存，是否将当前内容保存为项目？',
+                '保存项目',
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question,
+            )
+        except Exception:
+            return True
+        if res == DialogResult.Cancel:
+            return False  # 取消关闭
+        if res == DialogResult.Yes:
+            # 保存失败（如用户在「另存为」里取消）则取消关闭，避免丢失内容
+            if not api._save_current_project():
+                return False
+        return True  # 否：不保存，直接关闭
 
     def _on_maximized():
         _maximized['v'] = True
@@ -1037,15 +1163,13 @@ if __name__ == '__main__':
     if cfg['window'].get('maximized'):
         window.events.loaded += lambda: window.maximize()
 
-    def _install_close_guard():
-        # 在真实 WinForms 窗体上挂 FormClosing：edgechromium(WebView2) 后端并未订阅
-        # window.events.closing，必须直接挂 FormClosing 才能拦截关闭。窗体在
-        # webview.start() 内才创建，故用后台线程轮询至窗体就绪再挂。
+    def _install_min_size_guard():
+        # WebView2 后端的 min_size 偶发不生效，直接在 WinForms 层兜底设 MinimumSize。
+        # 注意：关闭确认逻辑已统一放到 window.events.closing 的订阅 _on_closing 中
+        # （pywebview 的 closing 事件在 edgechromium 后端会正常触发，订阅者返回 False 即取消关闭）。
         def _poll():
             try:
-                from System.Windows.Forms import (
-                    Application, MessageBox, MessageBoxButtons, MessageBoxIcon, DialogResult,
-                )
+                from System.Windows.Forms import Application
                 from System.Drawing import Size
             except Exception:
                 return
@@ -1053,40 +1177,15 @@ if __name__ == '__main__':
                 while Application.OpenForms.Count == 0:
                     threading.Event().wait(0.2)
                 form = Application.OpenForms[0]
-                # 强制最小窗口尺寸：pywebview 的 min_size 在 WebView2 后端偶发不生效，
-                # 直接在 WinForms 层设置 MinimumSize 最可靠，拖动到小于该尺寸会被系统自动拦住。
                 try:
                     form.MinimumSize = Size(1150, 720)
                 except Exception:
                     pass
-
-                def _handler(sender, args):
-                    _persist_geometry()
-                    # 表格为空时直接关闭；有内容才弹确认（是否保存工程）
-                    if not api._has_content:
-                        return
-                    try:
-                        res = MessageBox.Show(
-                            '字幕尚未保存，是否将当前内容保存为项目？',
-                            '保存项目',
-                            MessageBoxButtons.YesNoCancel,
-                            MessageBoxIcon.Question,
-                        )
-                    except Exception:
-                        return
-                    if res == DialogResult.Yes:
-                        if not api._save_current_project():
-                            args.Cancel = True
-                    elif res == DialogResult.Cancel:
-                        args.Cancel = True
-                    # DialogResult.No → 直接关闭，不保存
-
-                form.FormClosing += _handler
             except Exception:
                 pass
 
         threading.Thread(target=_poll, daemon=True).start()
 
-    _install_close_guard()
+    _install_min_size_guard()
 
     webview.start()

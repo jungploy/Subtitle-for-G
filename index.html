@@ -33,6 +33,7 @@
           <button class="dropdown-item" data-action="srt">导入带时码字幕</button>
           <button class="dropdown-item" data-action="txt">导入无时码文本</button>
           <button class="dropdown-item" data-action="docx">智能导入其他文档</button>
+          <button class="dropdown-item" data-action="seg" title="打开 Word/文本，先预览再按标点+最小长度断句，避免大段文本">智能分句导入</button>
           <div class="dropdown-divider"></div>
           <button class="dropdown-item" data-action="tc" title="用带时码的 EDIUS(.txt)/SRT/ASS 等文件的时码，按行序替换当前列表的时码（文本与译文不变）">仅导入时码</button>
         </div>
@@ -141,6 +142,10 @@
           <span class="toolbar-right">
             <button id="swapSides" class="tbtn-right" title="把左列（原文）与右列（译文）内容互换">交换文本</button>
             <span class="toolbar-sep" aria-hidden="true"></span>
+            <label class="sync-split-ctl" title="锁定后左侧原文列不可编辑，仅可编辑译文；译文单元格中间按回车会把后半段前置到下方译文单元格">
+              <input type="checkbox" id="lockSource" />
+              锁定原文
+            </label>
             <label class="sync-split-ctl" title="选中后断句时原文与译文同步拆行；不选中则只拆分当前编辑的单元格（按下方单元格内容决定新建一行，还是填入下方空单元格）">
               <input type="checkbox" id="syncSplit" />
               同步断句
@@ -232,6 +237,42 @@
         </div>
         <div class="modal-foot">
           <button id="aboutClose" class="primary">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 智能分句导入：先预览，再按标点+最小长度断句 -->
+    <div class="modal-overlay" id="segDialog" hidden>
+      <div class="modal">
+        <div class="modal-head">智能分句导入</div>
+        <div class="modal-body">
+          <div class="seg-desc">按勾选的标点断句。<b>句号 / 问号 / 感叹号</b>等句末标点会强制断句（尊重句子边界）；<b>逗号 / 分号 / 冒号</b>等句内标点仅在「当前句已达最小字符数」时才断，否则继续累计到下一个标点，避免把短碎片单独成行。</div>
+          <div class="seg-row">
+            <span class="seg-label">断句标点：</span>
+            <span class="seg-punct">
+              <label><input type="checkbox" id="segComma" checked> 逗号 ,</label>
+              <label><input type="checkbox" id="segPeriod" checked> 句号 .</label>
+              <label><input type="checkbox" id="segSemicolon" checked> 分号 ;</label>
+              <label><input type="checkbox" id="segColon" checked> 冒号 :</label>
+              <label><input type="checkbox" id="segQuestion" checked> 问号 ?</label>
+              <label><input type="checkbox" id="segExclaim" checked> 感叹号 !</label>
+            </span>
+          </div>
+          <div class="seg-row">
+            <span class="seg-minlen">每句最少 <input type="number" id="segMinLen" value="35" min="0" step="1"> 字符</span>
+            <label class="seg-keep"><input type="checkbox" id="segKeepParas" checked> 不跨段落合并</label>
+          </div>
+          <div class="seg-preview-wrap">
+            <div class="seg-preview-head">
+              <span>预览（每句一行）</span>
+              <span id="segCount">共 0 句</span>
+            </div>
+            <div class="seg-preview" id="segPreview"></div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="segCancel">取消</button>
+          <button id="segImport" class="primary">导入 (0 句)</button>
         </div>
       </div>
     </div>

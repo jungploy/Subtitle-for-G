@@ -25,6 +25,9 @@ build_log*.txt
 # 运行时用户配置（窗口大小/表格间距/文件位置等，不应提交）
 config.json
 
+# 旧构建产物（不应提交）
+_prev_Subtitle-for-G_*.exe
+
 # 清理/临时保留目录（不应提交）
 _trash_*/
 _trash_build_leftovers/

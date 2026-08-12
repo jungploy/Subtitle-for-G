@@ -378,6 +378,14 @@ button.primary:hover {
 .dropdown-item:hover {
   background: #f0f4fb;
 }
+.dropdown-item:disabled {
+  color: #b9bfc7;
+  cursor: not-allowed;
+  background: transparent;
+}
+.dropdown-item:disabled:hover {
+  background: transparent;
+}
 
 .dropdown-divider {
   height: 1px;
@@ -925,6 +933,12 @@ thead th.resizing .col-resizer {
   cursor: text;
 }
 
+/* 锁定原文模式下，原文单元格灰显并禁止编辑光标 */
+/* 锁定原文：仅禁止编辑（双击不进入编辑框），外观保持与普通单元格一致，不变灰 */
+.sub-table .source-line.locked {
+  cursor: not-allowed;
+}
+
 .sub-table .source-line:focus {
   background: #fffdf5;
 }
@@ -1090,6 +1104,115 @@ thead th.resizing .col-resizer {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, #fff);
   font-weight: 600;
+}
+
+/* 智能分句导入预览弹窗 */
+#segDialog .modal {
+  width: 620px;
+  max-width: 94vw;
+}
+.seg-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.seg-desc b {
+  color: var(--text);
+  font-weight: 600;
+}
+.seg-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.seg-row .seg-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.seg-punct {
+  display: inline-flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.seg-punct label {
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.seg-minlen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.seg-minlen input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: center;
+}
+.seg-keep {
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.seg-preview-wrap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.seg-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+  background: #fafbfc;
+}
+.seg-preview {
+  max-height: 300px;
+  overflow: auto;
+  padding: 4px 12px;
+}
+.seg-line {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  border-bottom: 1px dashed var(--border);
+}
+.seg-line:last-child {
+  border-bottom: none;
+}
+.seg-idx {
+  color: var(--muted);
+  min-width: 30px;
+  text-align: right;
+  user-select: none;
+  flex: none;
+}
+.seg-txt {
+  flex: 1;
+  word-break: break-word;
+}
+.seg-more {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 0;
+  text-align: center;
 }
 
 /* 响应式：窄屏仍保持横向滚动，表格不折列 */
