@@ -110,6 +110,22 @@ body {
   font-size: 14px;
   color: var(--text);
 }
+/* 右侧分组内的「交换文本」按钮：字号/颜色与同组控件统一，保留原生按钮边框 */
+.toolbar-right > button.tbtn-right {
+  font-size: inherit;
+  color: inherit;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.toolbar-right > button.tbtn-right:hover {
+  background: #f1f3f5;
+}
+.toolbar-right > button.tbtn-right:active {
+  background: #e6e9ed;
+}
 
 /* 表格工具条「同步断句」开关（右侧分组内，字号/颜色与字数控制统一） */
 .sync-split-ctl {

@@ -71,7 +71,6 @@
           </div>
         </div>
       </div>
-      <button id="swapSides" title="把左列（原文）与右列（译文）内容互换">文本互换</button>
       <button id="findReplaceToggle" title="全文查找 / 替换（Ctrl+F）">查找替换</button>
       <button id="translateToggle" title="展开 / 收起翻译面板">翻译</button>
       <button id="aboutBtn" title="关于 Subtitle-for-G">关于</button>
@@ -133,14 +132,18 @@
             <button id="deleteRows" title="删除选中的字幕行（Del，删除前会确认）">删除</button>
           </span>
           <span class="toolbar-right">
+            <button id="swapSides" class="tbtn-right" title="把左列（原文）与右列（译文）内容互换">交换文本</button>
+            <span class="toolbar-sep" aria-hidden="true"></span>
             <label class="sync-split-ctl" title="选中后断句时原文与译文同步拆行；不选中则只拆分当前编辑的单元格（按下方单元格内容决定新建一行，还是填入下方空单元格）">
               <input type="checkbox" id="syncSplit" />
               同步断句
             </label>
+            <span class="toolbar-sep" aria-hidden="true"></span>
             <span class="len-group">
               <label class="len-ctl" title="原文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">原文<input type="number" id="srcLenLimit" class="len-input" min="0" step="1" value="0" /></label>
               <label class="len-ctl" title="译文列纯文字长度上限，超过则该单元格文字标红（0 = 不限制）">译文<input type="number" id="tgtLenLimit" class="len-input" min="0" step="1" value="0" /></label>
             </span>
+            <span class="toolbar-sep" aria-hidden="true"></span>
             <label class="pad-ctl">间距
               <button id="padMinus" type="button" title="减小间距">−</button>
               <span id="padVal">4</span>
