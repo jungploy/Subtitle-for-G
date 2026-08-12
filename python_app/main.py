@@ -943,7 +943,7 @@ if __name__ == '__main__':
         create_kwargs['y'] = int(win_y)
 
     window = webview.create_window(
-        f'Subtitle-for-G {VERSION} - 字幕双语编辑器',
+        'Subtitle-for-G - 字幕双语编辑器',
         f'http://127.0.0.1:{PORT}',
         **create_kwargs,
     )
