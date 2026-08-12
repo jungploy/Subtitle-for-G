@@ -787,10 +787,46 @@ function buildVtt(plain, content) {
   return 'WEBVTT\n\n' + (blocks.length ? blocks.join('\n\n') + '\n' : '');
 }
 
+// EDIUS 导出：把 SRT 时间码（HH:MM:SS,mmm）反算回 EDIUS 时间码（HH:MM:SS:FF，FF=帧号）。
+// 必须与导入 ediusToSrt 严格互逆：导入用 ms=round(FF/fps*1000)，故导出用 FF=round(小数秒×fps)，
+// 且全程使用真实 fps（如 23.976）而非名义帧率，否则 23.976 与 24 会错位（已踩坑）。
+function srtToEdius(ts, fps) {
+  const m = /^(\d{1,2}):(\d{2}):(\d{2}),(\d{3})$/.exec((ts || '').trim());
+  if (!m) return '00:00:00:00';
+  const H = +m[1], M = +m[2], S = +m[3], MS = +m[4];
+  const fracSeconds = H * 3600 + M * 60 + S + MS / 1000;
+  const sInt = Math.floor(fracSeconds);
+  let frame = Math.round((fracSeconds - sInt) * fps);
+  const nominalFps = Math.round(fps); // 仅用于进位保护
+  // 进位保护：round 可能使帧号达到名义帧率上限（如 0.979×24≈24），此时进 1 秒、帧号归零
+  let sec = sInt;
+  if (frame >= nominalFps) { frame = 0; sec += 1; }
+  const s = sec % 60;
+  const mm = Math.floor(sec / 60) % 60;
+  const hh = Math.floor(sec / 3600);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(hh)}:${p(mm)}:${p(s)}:${p(frame)}`;
+}
+
+// EDIUS 纯文本导出：每行「起始时码 结束时码 文本」。
+// 双语(content=bilingual)复用 exportLines 的「原文\\译文」单行分隔，与 EDIUS 导入格式一致；
+// 原文/译文分别只取对应列（译文为空回退原文，与 txt 导出行为一致）。
+function buildEdius(plain, content, fps) {
+  const lines = [];
+  for (const it of plain) {
+    const start = srtToEdius(it.start || '00:00:00,000', fps);
+    const end = srtToEdius(it.end || '00:00:00,000', fps);
+    const text = exportLines(it, content).join('\n');
+    if (!text) continue;
+    lines.push(`${start} ${end} ${text}`);
+  }
+  return lines.length ? lines.join('\n') + '\n' : '';
+}
+
 // 默认导出文件名：沿用当前源文件名（去扩展名），扩展名随格式变化；
 // content 决定尾部标签（_原文 / _译文 / _双语），避免三种导出互相覆盖。
 function exportDefaultName(format, content) {
-  const ext = format === 'txt' ? 'txt' : format === 'srt' ? 'srt' : 'vtt';
+  const ext = (format === 'txt' || format === 'edius') ? 'txt' : format;
   let base = 'subtitles';
   if (currentSourcePath) {
     const f = currentSourcePath.split(/[\\/]/).pop() || '';
@@ -804,8 +840,8 @@ function exportDefaultName(format, content) {
   return base + tag + '.' + ext;
 }
 
-// 生成导出文本；无内容返回 null（由调用方提示）
-function exportSubtitles(format, content) {
+// 生成导出文本；无内容返回 null（由调用方提示）。fps 仅 EDIUS 格式需要（帧率换算）。
+function exportSubtitles(format, content, fps) {
   const items = editor.getItems();
   if (!items.length) {
     setStatus('没有可导出的内容');
@@ -820,20 +856,28 @@ function exportSubtitles(format, content) {
   }));
   if (format === 'txt') return buildTxt(plain, content);
   if (format === 'vtt') return buildVtt(plain, content);
+  if (format === 'edius') return buildEdius(plain, content, fps);
   return buildSrt(plain, content);
 }
 
 // 直接导出（无弹窗）：按指定内容(content)与格式(format)生成文本并保存。
-// content ∈ {source 原文, target 译文, bilingual 原文+译文双行}；format ∈ {txt, srt, vtt}
+// content ∈ {source 原文, target 译文, bilingual 原文+译文双行}；format ∈ {txt, srt, vtt, edius}
 async function doExportDirect(content, format) {
-  const text = exportSubtitles(format, content);
+  // EDIUS 导出需要工程帧率：复用导入时的帧率选择框（与导入一致，且会记忆默认）。
+  let fps = null;
+  if (format === 'edius') {
+    fps = await askEdiusFps();
+    if (fps == null) return; // 用户取消帧率选择
+  }
+  const text = exportSubtitles(format, content, fps);
   if (text == null) return; // exportSubtitles 已提示「没有可导出的内容」
   const filename = exportDefaultName(format, content);
+  const ext = (format === 'edius') ? 'txt' : format; // EDIUS 文件本质是 .txt
   if (isTauri()) {
     try {
       const path = await window.__TAURI__.dialog.save({
         defaultPath: filename,
-        filters: [{ name: '导出文件', extensions: [format] }],
+        filters: [{ name: '导出文件', extensions: [ext] }],
       });
       if (!path) return;
       await window.__TAURI__.core.invoke('write_file', { path, contents: text });
