@@ -944,7 +944,7 @@ if __name__ == '__main__':
         'js_api': api,
         'width': win_w,
         'height': win_h,
-        'min_size': (900, 600),
+        'min_size': (1150, 720),
     }
     # 仅当同时记录了有效的 x、y 时才还原窗口位置（否则由系统居中放置）
     if isinstance(win_x, (int, float)) and isinstance(win_y, (int, float)):
@@ -1039,7 +1039,7 @@ if __name__ == '__main__':
                 # 强制最小窗口尺寸：pywebview 的 min_size 在 WebView2 后端偶发不生效，
                 # 直接在 WinForms 层设置 MinimumSize 最可靠，拖动到小于该尺寸会被系统自动拦住。
                 try:
-                    form.MinimumSize = Size(900, 600)
+                    form.MinimumSize = Size(1150, 720)
                 except Exception:
                     pass
 
